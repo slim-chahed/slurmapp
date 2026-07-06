@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Server Down - HPC Esprit</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --esprit-red: #c8102e;
+            --esprit-black: #1a1a1a;
+            --esprit-white: #ffffff;
+        }
+        body {
+            background-color: var(--esprit-black);
+            color: var(--esprit-white);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .hero {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+        }
+        .brand-title {
+            font-size: 2.5rem;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: var(--esprit-red);
+            margin-bottom: 1rem;
+        }
+        .alert-custom {
+            background-color: var(--esprit-white);
+            color: var(--esprit-black);
+            border-left: 6px solid var(--esprit-red);
+            padding: 1.5rem;
+            max-width: 600px;
+            margin: 0 auto;
+            text-align: left;
+        }
+        .alert-custom h2 {
+            color: var(--esprit-red);
+            font-weight: 700;
+            font-size: 1.4rem;
+            margin-bottom: 0.75rem;
+        }
+        .service-list {
+            list-style: none;
+            padding: 0;
+            margin: 1rem 0;
+        }
+        .service-list li {
+            padding: 0.4rem 0;
+            border-bottom: 1px solid #dddddd;
+        }
+        .service-list li:last-child {
+            border-bottom: none;
+        }
+        .badge-up {
+            background-color: #198754;
+            color: white;
+        }
+        .badge-down {
+            background-color: var(--esprit-red);
+            color: white;
+        }
+        footer {
+            text-align: center;
+            padding: 1rem;
+            color: #888888;
+            font-size: 0.85rem;
+        }
+        a {
+            color: var(--esprit-white);
+            text-decoration: underline;
+        }
+        a:hover {
+            color: var(--esprit-red);
+        }
+    </style>
+</head>
+<body>
+    <div class="hero">
+        <div class="container">
+            <div class="alert-custom">
+                <h2>Server Currently Unavailable</h2>
+                <p>
+                    One or more required services are currently down.
+                    Please wait until they are restored or contact the administrator.
+                </p>
+
+                {% if services %}
+                <h5 class="mt-3">Service Details</h5>
+                <ul class="service-list">
+                    {% for s in services %}
+                    <li>
+                        <strong>{{ s.name }}</strong>:
+                        {% if s.up %}
+                        <span class="badge badge-up">UP</span>
+                        {% else %}
+                        <span class="badge badge-down">DOWN</span>
+                        {% endif %}
+                        <span class="text-muted small">({{ s.type }})</span>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
+
+                <p class="mb-0">
+                    <a href="/">Return to home page</a>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        &copy; HPC Esprit
+    </footer>
+</body>
+</html>

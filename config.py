@@ -33,3 +33,11 @@ class Config:
     SLURM_REST_URL = os.getenv("SLURM_REST_URL", "http://192.168.74.171:6820")
     SLURM_SERVICE_USER = os.getenv("SLURM_SERVICE_USER", "webapp")
     SLURM_JWT_TOKEN = os.getenv("SLURM_JWT_TOKEN", "")
+
+    # VM / SSH monitoring
+    VM_HOST = os.getenv("VM_HOST", "192.168.74.171")
+    VM_SSH_PORT = int(os.getenv("VM_SSH_PORT", 22))
+    VM_SSH_USER = os.getenv("VM_SSH_USER", "ubuntu")
+    VM_SSH_KEY_PATH = os.getenv("VM_SSH_KEY_PATH", os.path.expanduser("~/.ssh/id_rsa"))
+    VM_SSH_PASSPHRASE = os.getenv("VM_SSH_PASSPHRASE", "")
+    VM_HEALTH_CACHE_SECONDS = int(os.getenv("VM_HEALTH_CACHE_SECONDS", 30))

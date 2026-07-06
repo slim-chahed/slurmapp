@@ -8,3 +8,4 @@ redis
 pyjwt
 requests
 jinja2
+paramiko
