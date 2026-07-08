@@ -21,23 +21,19 @@ templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
-# ---------- Middleware: block app use when services are down ----------
-PUBLIC_PATHS = {"/", "/server-down"}
+PUBLIC_PATHS = {"/", "/login", "/system-down"}
 
 
 class HealthGateMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
-        if path.startswith("/static"):
-            return await call_next(request)
-
-        if path in PUBLIC_PATHS:
+        if path in PUBLIC_PATHS or path.startswith("/static"):
             return await call_next(request)
 
         health = get_health()
         if not health["overall_up"]:
-            return RedirectResponse(url="/server-down", status_code=302)
+            return RedirectResponse(url="/system-down", status_code=302)
 
         return await call_next(request)
 
@@ -45,7 +41,6 @@ class HealthGateMiddleware(BaseHTTPMiddleware):
 app.add_middleware(HealthGateMiddleware)
 
 
-# ---------- Helper Functions ----------
 def get_user_reservations(db: Session, user_id: int, search: str = None):
     if search:
         raw_conn = get_raw_connection()
@@ -64,7 +59,13 @@ def get_user_reservations(db: Session, user_id: int, search: str = None):
 
 # ---------- Routes ----------
 @app.get("/", response_class=HTMLResponse)
-async def root(request: Request):
+async def root(request: Request, user: User = Depends(get_current_user_optional)):
+    if user:
+        health = get_health()
+        if not health["overall_up"]:
+            return RedirectResponse(url="/system-down", status_code=302)
+        return RedirectResponse(url="/dashboard", status_code=302)
+
     health = get_health()
     downtime = get_downtime()
     return templates.TemplateResponse(request, "landing.html", {
@@ -74,12 +75,16 @@ async def root(request: Request):
     })
 
 
-@app.get("/server-down", response_class=HTMLResponse)
-async def server_down(request: Request):
+@app.get("/system-down", response_class=HTMLResponse)
+async def system_down(request: Request, user: User = Depends(get_current_user_optional)):
+    if not user:
+        return RedirectResponse(url="/", status_code=302)
+
     health = get_health()
     downtime = get_downtime()
-    return templates.TemplateResponse(request, "server_down.html", {
+    return templates.TemplateResponse(request, "system_down.html", {
         "request": request,
+        "user": user,
         "services": health["services"],
         "overall_up": health["overall_up"],
         "downtime_message": format_downtime(downtime),
@@ -96,7 +101,9 @@ async def login(request: Request, username: str = Form(...), password: str = For
     if authenticate_ldap(username, password):
         user = get_or_create_user(db, username)
         token = create_jwt(user.id, user.role)
-        response = RedirectResponse(url="/dashboard", status_code=302)
+        health = get_health()
+        target = "/system-down" if not health["overall_up"] else "/dashboard"
+        response = RedirectResponse(url=target, status_code=302)
         response.set_cookie(key="access_token", value=token, httponly=False)
         return response
     else:
@@ -116,7 +123,10 @@ async def dashboard(request: Request, search: str = Query(None), db: Session = D
 
 @app.get("/request", response_class=HTMLResponse)
 async def request_form(request: Request, user: User = Depends(get_current_user)):
-    return templates.TemplateResponse(request, "request_form.html", {"request": request})
+    return templates.TemplateResponse(request, "request_form.html", {
+        "request": request,
+        "user": user
+    })
 
 
 @app.post("/request")
@@ -164,7 +174,8 @@ async def reservation_detail(
         raise HTTPException(status_code=404, detail="Reservation not found")
     return templates.TemplateResponse(request, "reservation_detail.html", {
         "request": request,
-        "reservation": reservation
+        "reservation": reservation,
+        "user": user
     })
 
 
@@ -176,6 +187,7 @@ async def admin_panel(request: Request, db: Session = Depends(get_db), user: Use
     return templates.TemplateResponse(request, "admin_panel.html", {
         "request": request,
         "pending": pending,
+        "user": user,
         "services": health["services"],
         "overall_up": health["overall_up"],
         "downtime_message": format_downtime(get_downtime()),

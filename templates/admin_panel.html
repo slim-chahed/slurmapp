@@ -1,92 +1,78 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Panel</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Panel - HPC Esprit</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="/static/style.css" rel="stylesheet">
 </head>
 <body>
-<div class="container mt-4">
-    <h2>Pending Reservations</h2>
-    <a href="/dashboard" class="btn btn-secondary">Back to Dashboard</a>
-    <hr>
-
-    {% if overall_up %}
-    <div class="alert alert-success">
-        All services are operational.
+  <nav class="navbar navbar-expand-lg navbar-esprit">
+    <div class="container">
+      <a class="navbar-brand" href="/admin">HPC <span>ESPRIT</span></a>
+      <div class="ms-auto text-white">
+        {{ user.username }} ({{ user.role }})
+        <a href="/logout" class="btn btn-sm btn-esprit-red ms-2">Logout</a>
+      </div>
     </div>
-    {% else %}
-    <div class="alert alert-danger">
-        WARNING: One or more services are down. {{ downtime_message }}
+  </nav>
+
+  <div class="container mt-4">
+    <h2 class="mb-3">Pending Reservations</h2>
+    <a href="/dashboard" class="btn btn-secondary mb-3">Back to Dashboard</a>
+
+    <div class="card-esprit p-3 mb-4">
+      <h5 class="mb-0">System Status</h5>
+      {% if overall_up %}
+        <span class="badge bg-success">UP</span>
+      {% else %}
+        <span class="badge bg-danger">DOWN</span>
+        <span class="ms-2">{{ downtime_message }}</span>
+      {% endif %}
     </div>
-    {% endif %}
-
-    <h5 class="mt-4">Service Status</h5>
-    <table class="table table-bordered table-sm">
-        <thead>
-            <tr>
-                <th>Service</th>
-                <th>Type</th>
-                <th>Status</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for s in services %}
-            <tr>
-                <td>{{ s.name }}</td>
-                <td>{{ s.type }}</td>
-                <td>
-                    {% if s.up %}
-                    <span class="badge bg-success">UP</span>
-                    {% else %}
-                    <span class="badge bg-danger">DOWN</span>
-                    {% endif %}
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-
-    <hr>
 
     {% if pending %}
-    <table class="table table-bordered">
-        <thead>
-            <tr>
-                <th>ID</th>
-                <th>Job Name</th>
-                <th>User ID</th>
-                <th>CPU</th>
-                <th>RAM</th>
-                <th>Duration</th>
-                <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for res in pending %}
-            <tr>
-                <td>{{ res.id }}</td>
-                <td>{{ res.job_name }}</td>
-                <td>{{ res.user_id }}</td>
-                <td>{{ res.cpu }}</td>
-                <td>{{ res.ram }}</td>
-                <td>{{ res.duration }}</td>
-                <td>
-                    <form method="post" action="/admin/approve/{{ res.id }}" style="display:inline;">
-                        <button type="submit" class="btn btn-success btn-sm">Approve</button>
-                    </form>
-                    <form method="post" action="/admin/reject/{{ res.id }}" style="display:inline;">
-                        <button type="submit" class="btn btn-danger btn-sm">Reject</button>
-                    </form>
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
+    <table class="table table-bordered table-esprit">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Job Name</th>
+          <th>User ID</th>
+          <th>CPU</th>
+          <th>RAM</th>
+          <th>Duration</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for res in pending %}
+        <tr>
+          <td>{{ res.id }}</td>
+          <td>{{ res.job_name }}</td>
+          <td>{{ res.user_id }}</td>
+          <td>{{ res.cpu }}</td>
+          <td>{{ res.ram }}</td>
+          <td>{{ res.duration }}</td>
+          <td>
+            <form method="post" action="/admin/approve/{{ res.id }}" style="display:inline;">
+              <button type="submit" class="btn btn-success btn-sm">Approve</button>
+            </form>
+            <form method="post" action="/admin/reject/{{ res.id }}" style="display:inline;">
+              <button type="submit" class="btn btn-danger btn-sm">Reject</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
     </table>
     {% else %}
-    <p>No pending reservations.</p>
+    <div class="alert alert-info">No pending reservations.</div>
     {% endif %}
-</div>
+  </div>
+
+  <footer>
+    &copy; HPC Esprit
+  </footer>
 </body>
 </html>

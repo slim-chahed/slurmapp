@@ -1,64 +1,73 @@
-# Plan: Landing Page + SSH-Based Health Checks
+# Plan: Refined Landing + Dynamic Server Status + Esprit UI Overhaul
 
 ## Goal
-Add a public landing page at `/` with a red/white/black Esprit-themed design, a server uptime indicator, and auth gating that blocks login when dependent services/containers are down. Admins see a detailed per-service breakdown in addition to the status summary.
+- Landing page shows dynamic UP/DOWN indicator with downtime duration.
+- `/login` always allows LDAP auth, but routes users based on role and system health.
+- Regular user + system down → gets JWT session, then sees a "please wait" system-down page.
+- Regular user + system up → normal dashboard flow.
+- Admin + system down → after login, sees admin panel with full per-service breakdown.
+- All HTML templates receive a cohesive black/white/red Esprit-branded UI.
+
+## Confirmed Decisions
+- SSH username/path for VM: already configured and working.
+- Container names match `docker-compose.yml`: `app-mysql`, `ldap-server`.
+- System-down state does **not** block JWT issuance; it only changes post-login routing and UI.
 
 ## Affected Routes / Behavior
-| Route | Current behavior | New behavior |
-|---|---|---|
-| `/` | Redirects to `/login` | Serves `landing.html` |
-| `/login` | Always allows login | Redirects to `server_down.html` if any dependency is down |
-| `/dashboard`, `/request`, `/reservation/{id}`, `/admin` | Always allow access if authenticated | Redirect to `server_down.html` if dependencies are down |
-| `/admin` | Shallow "pending" list | Adds per-service status table for admins (MySQL, LDAP, Slurm REST, munge, slurmctld, slurmd, DB container, LDAP container) |
+| Route | Behavior |
+|---|---|
+| `/` | Public landing with Esprit theme, UP/DOWN indicator, downtime text, login link, contact text. |
+| `/login` (GET) | Public login form (always accessible). |
+| `/login` (POST) | Always attempts LDAP auth. On success: create JWT. If system down → redirect to `/system-down`; if system up → redirect to `/dashboard`. |
+| `/system-down` | Public page. Regular users see: "server is down, please wait". Admin sees: same page plus full per-service status table + admin log-back-in link. Unauthenticated users see landing page. |
+| `/dashboard`, `/request`, `/reservation/{id}`, `/admin` | Middleware-gated: if overall_up=False, authenticated users are redirected to `/system-down`. |
+| `/admin` (GET/POST) | Existing admin approve/reject behavior unchanged. When down, admin is redirected to `/system-down` (which also shows the detail table). |
 
 ## New Files
-- `templates/landing.html` — public landing page
-- `templates/server_down.html` — shown when dependencies are down
-- `vm_monitor.py` — SSH health check module
+- None — reuse `templates/landing.html`, `templates/server_down.html`.
 
 ## Modified Files
-- `config.py` — add SSH and service-controller config
-- `main.py` — add `/` route, `server_down.html` route, dependency-checking middleware / dependency, admin detail endpoint or template context
-- `templates/dashboard.html` — admin section gets service status table (optional)
+- `config.py` — no change needed; current SSH config is sufficient.
+- `main.py` — 
+  - Remove current HealthGateMiddleware.
+  - Add simple health-gate dependency logic per-route or middleware that preserves public paths, landings, and login.
+  - Add `/system-down` route with `role`-aware template context.
+  - Ensure `/login` POST assigns JWT then redirects based on health.
+- `templates/landing.html` — keep Esprit theme, enhance status badge styling, ensure dynamic uptime/downtime text.
+- `templates/server_down.html` — gate content by role. Show generic "please wait" message for non-admins; for admins append service breakdown table + return-to-admin link.
+- `templates/login.html` — Esprit theme styling.
+- `templates/dashboard.html` — Esprit navbar + status summary + refined tables.
+- `templates/request_form.html` — Esprit form styling.
+- `templates/reservation_detail.html` — Esprit styling.
+- `templates/admin_panel.html` — Esprit table, badges, alert banners.
+- `static/style.css` — centralized Esprit variables, navbar, tables, buttons, badges, responsive tweaks.
 
-## Config Additions
-```python
-VM_HOST = "192.168.74.171"   # already matches services
-VM_SSH_USER = "..."          # UNRESOLVED
-VM_SSH_KEY_PATH = "..."      # UNRESOLVED
+## Config Already Present
+- `VM_SSH_USER`, `VM_SSH_KEY_PATH`, `VM_HEALTH_CACHE_SECONDS` — implemented and validated.
+
+## UI/UX Scope (Esprit Theme)
+- Colors: `#c8102e` (red), `#1a1a1a` (black), `#ffffff` (white).
+- Shared navbar on all authenticated pages: Esprit logo wordmark, current user + role, logout.
+- Shared footer.
+- Buttons, cards, tables, alerts, forms all using Esprit palette.
+- Status indicators: green `UP`, red `DOWN`.
+
+## Health-Gate Logic
 ```
-
-Proposed health targets:
-- **TCP probes**: LDAP `:389`, MySQL `:3306`, Slurm REST `:6820`
-- **SSH / systemd**: `slurmrestd`, `slurmctld`, `slurmd`, `munge`
-- **SSH / docker**: DB container, LDAP container
-
-## Downtime Tracking
-- Maintain an in-memory (module-level) `first_failure: datetime | None` in `vm_monitor.py`.
-- On each health check success → `first_failure = None`.
-- On any failure and `first_failure is None` → set `first_failure = now`.
-- Landing page computes uptime/downtime from this timestamp.
-
-## Flow
-```mermaid
-flowchart TD
-    A[Browser hits /] --> B{SSH/TCP Checks}
-    B -->|All up| C[Show landing: server UP + downtime=0]
-    B -->|Any down| D[Show landing: server DOWN + downtime duration]
-    
-    E[User clicks Login] --> F{health check}
-    F -->|down| G[Redirect to /server-down]
-    F -->|up| H[Normal LDAP/JWT login]
-    
-    I[Admin logs in] --> J[Dashboard + service status table]
+Request → middleware sees non-public path
+  → system down?
+      yes → if authenticated → redirect /system-down
+      no  → allow
 ```
+Exception: `/login` POST must bypass middleware so login/auth still issues JWT.
 
-## Risk / Trade-offs
-- Polling SSH on every request is slow. Solution: cache result for N seconds (e.g., 30-60s) in a module-level variable on the FastAPI app state or `lru_cache`.
-- SSH key must be readable by the FastAPI process user. We should NOT store passwords in `.env`; prefer key-based auth.
-- If the VM itself is unreachable (SSH timeout), all dependent services are treated as down.
-
-## One Unresolved Question
-**What is the SSH username and auth method for the VM at `192.168.74.171`?**
-
-Recommended answer: use key-based auth with a dedicated service account (e.g., `hpcadmin` or `ubuntu`), store only the private key path in `.env` / `config.py`, and do not store a password. If you want, I can also include a short "setup SSH key" checklist in the plan so you can configure it on the VM before implementing.
+## Validation Plan
+- `/` renders landing, shows DOWN indicator, downtime text, login button, contact note.
+- `/login` loads and submits.
+- `docker/ldap/name` issue is already fixed in vm_monitor.
+- Test matrix:
+  1. System up + regular user → `/dashboard`.
+  2. System down + regular user → JWT set, redirect `/system-down` (generic message).
+  3. System down + admin → JWT set, redirect `/system-down` (service detail table visible).
+  4. `/dashboard` with system down → redirect to `/system-down`.
+  5. All pages visually match Esprit theme.

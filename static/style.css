@@ -1,0 +1,135 @@
+:root {
+  --esprit-red: #c8102e;
+  --esprit-black: #1a1a1a;
+  --esprit-white: #ffffff;
+  --esprit-gray: #f5f5f5;
+  --esprit-dark-gray: #2d2d2d;
+}
+
+body {
+  background-color: var(--esprit-gray);
+  color: var(--esprit-black);
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Sticky footer */
+footer, .site-footer {
+  margin-top: auto;
+  background-color: var(--esprit-black);
+  color: #888888;
+  padding: 1rem 0;
+  text-align: center;
+  font-size: 0.85rem;
+}
+
+/* Navbar */
+.navbar-esprit {
+  background-color: var(--esprit-black);
+  border-bottom: 3px solid var(--esprit-red);
+}
+.navbar-esprit .navbar-brand {
+  color: var(--esprit-white);
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.navbar-esprit .navbar-brand span {
+  color: var(--esprit-red);
+}
+.navbar-esprit .nav-link {
+  color: var(--esprit-white);
+}
+.navbar-esprit .nav-link:hover {
+  color: var(--esprit-red);
+}
+
+/* Buttons */
+.btn-esprit-red {
+  background-color: var(--esprit-red);
+  border: none;
+  color: var(--esprit-white);
+}
+.btn-esprit-red:hover {
+  background-color: #a00c26;
+  color: var(--esprit-white);
+}
+
+.btn-esprit-outline {
+  background: transparent;
+  border: 2px solid var(--esprit-red);
+  color: var(--esprit-red);
+}
+.btn-esprit-outline:hover {
+  background: var(--esprit-red);
+  color: var(--esprit-white);
+}
+
+/* Cards */
+.card-esprit {
+  border-top: 4px solid var(--esprit-red);
+  background-color: var(--esprit-white);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  color: var(--esprit-black);
+}
+
+/* Tables */
+.table-esprit thead {
+  background-color: var(--esprit-black);
+  color: var(--esprit-white);
+}
+.table-esprit th {
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.85rem;
+  letter-spacing: 0.5px;
+}
+
+/* Landing hero */
+.hero-landing {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--esprit-white);
+  background: linear-gradient(135deg, var(--esprit-black) 0%, #333333 100%);
+}
+.hero-landing h1 {
+  color: var(--esprit-red);
+  text-transform: uppercase;
+  letter-spacing: 2px;
+}
+
+/* Landing page white card override so text stays dark */
+.hero-landing .card-esprit {
+  color: var(--esprit-black);
+}
+
+/* Status badge */
+.status-indicator {
+  display: inline-block;
+  padding: 0.5rem 1.5rem;
+  border-radius: 0;
+  font-weight: 700;
+  font-size: 1.1rem;
+}
+.status-up {
+  background-color: #198754;
+  color: white;
+}
+.status-down {
+  background-color: var(--esprit-red);
+  color: white;
+}
+
+/* Links */
+a { color: var(--esprit-red); }
+a:hover { color: #a00c26; }
+
+/* Alerts */
+.alert-esprit {
+  border-left: 4px solid var(--esprit-red);
+}

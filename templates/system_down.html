@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>System Down - HPC Esprit</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="/static/style.css" rel="stylesheet">
+</head>
+<body>
+  <nav class="navbar navbar-expand-lg navbar-esprit">
+    <div class="container">
+      <a class="navbar-brand" href="/">HPC <span>ESPRIT</span></a>
+      <div class="ms-auto text-white">
+        {{ user.username }} ({{ user.role }})
+        <a href="/logout" class="btn btn-sm btn-esprit-red ms-2">Logout</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="container mt-4">
+    {% if user.role == 'admin' %}
+    <div class="alert alert-danger alert-esprit">
+      <h4>System Currently Unavailable</h4>
+      <p>{{ downtime_message }}</p>
+      <p>One or more required services are currently down. Please wait until they are restored or contact the administrator.</p>
+    </div>
+
+    <h5 class="mt-4">Service Status</h5>
+    <table class="table table-bordered table-esprit">
+      <thead>
+        <tr>
+          <th>Service</th>
+          <th>Type</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in services %}
+        <tr>
+          <td>{{ s.name }}</td>
+          <td>{{ s.type }}</td>
+          <td>
+            {% if s.up %}
+            <span class="badge bg-success">UP</span>
+            {% else %}
+            <span class="badge bg-danger">DOWN</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <div class="mt-4">
+      <a href="/admin" class="btn btn-esprit-red me-2">Go to Admin Panel</a>
+      <a href="/" class="btn btn-secondary">Back to Landing</a>
+    </div>
+
+    {% else %}
+    <div class="card-esprit p-5" style="max-width: 600px; margin: 0 auto;">
+      <h2 class="text-center">System Currently Unavailable</h2>
+      <p class="text-center mt-3">One or more required services are currently down. Please wait until they are restored or contact the administrator.</p>
+      <p class="text-center mt-3">{{ downtime_message }}</p>
+      <div class="text-center mt-4">
+        <a href="/" class="btn btn-esprit-red">Return to Home</a>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <footer>
+    &copy; HPC Esprit
+  </footer>
+</body>
+</html>
