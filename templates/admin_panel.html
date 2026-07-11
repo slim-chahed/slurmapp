@@ -32,13 +32,30 @@
       {% endif %}
     </div>
 
+    <div class="row mb-4">
+      <div class="col-md-6">
+        <div class="card-esprit p-3">
+          <h5 class="mb-2">Cluster Resources</h5>
+          <div>Free CPU: <strong id="cpu-free">{{ resources.free_cpu }}</strong> / <span id="cpu-total">{{ resources.total_cpu }}</span></div>
+          <div class="progress mt-1" style="height: 10px;">
+            <div id="cpu-bar" class="progress-bar bg-success" style="width: {{ (resources.free_cpu / resources.total_cpu * 100) if resources.total_cpu else 0 }}%"></div>
+          </div>
+          <div class="mt-2">Free RAM: <strong id="ram-free">{{ resources.free_ram_gb }}</strong> / <span id="ram-total">{{ resources.total_ram_gb }}</span> GB</div>
+          <div class="progress mt-1" style="height: 10px;">
+            <div id="ram-bar" class="progress-bar bg-info" style="width: {{ (resources.free_ram_gb / resources.total_ram_gb * 100) if resources.total_ram_gb else 0 }}%"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     {% if pending %}
     <table class="table table-bordered table-esprit">
       <thead>
         <tr>
           <th>ID</th>
           <th>Job Name</th>
-          <th>User ID</th>
+          <th>Language</th>
+          <th>Mode</th>
           <th>CPU</th>
           <th>RAM</th>
           <th>Duration</th>
@@ -50,7 +67,8 @@
         <tr>
           <td>{{ res.id }}</td>
           <td>{{ res.job_name }}</td>
-          <td>{{ res.user_id }}</td>
+          <td><span class="badge bg-primary">{{ res.language }}</span></td>
+          <td><span class="badge bg-secondary">{{ res.mode }}</span></td>
           <td>{{ res.cpu }}</td>
           <td>{{ res.ram }}</td>
           <td>{{ res.duration }}</td>
@@ -71,7 +89,31 @@
     {% endif %}
   </div>
 
-  <footer>
+  <script>
+    async function refreshResources() {
+      try {
+        const res = await fetch('/debug/resources');
+        if (!res.ok) return;
+        const data = await res.json();
+        const cpuFree = document.getElementById('cpu-free');
+        const cpuTotal = document.getElementById('cpu-total');
+        const cpuBar = document.getElementById('cpu-bar');
+        const ramFree = document.getElementById('ram-free');
+        const ramTotal = document.getElementById('ram-total');
+        const ramBar = document.getElementById('ram-bar');
+        if (cpuFree) cpuFree.textContent = data.free_cpu;
+        if (cpuTotal) cpuTotal.textContent = data.total_cpu;
+        if (cpuBar) cpuBar.style.width = ((data.free_cpu / data.total_cpu) * 100) + '%';
+        if (ramFree) ramFree.textContent = data.free_ram_gb;
+        if (ramTotal) ramTotal.textContent = data.total_ram_gb;
+        if (ramBar) ramBar.style.width = ((data.free_ram_gb / data.total_ram_gb) * 100) + '%';
+      } catch (e) {
+        console.error('Resource refresh failed:', e);
+      }
+    }
+    setInterval(refreshResources, 2000);
+  </script>
+  <footer class="site-footer">
     &copy; HPC Esprit
   </footer>
 </body>

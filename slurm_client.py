@@ -1,6 +1,9 @@
 import requests
 import json
+import paramiko
+import os
 from config import Config
+
 
 def submit_slurm_job(script: str) -> dict:
     """
@@ -16,8 +19,8 @@ def submit_slurm_job(script: str) -> dict:
     payload = {
         "script": script,
         "job": {
-            "account": "default",
             "partition": "debug",
+            "current_working_directory": "/home/webapp",
             "environment": {
                 "PATH": "/usr/local/bin:/usr/bin:/bin"
             }

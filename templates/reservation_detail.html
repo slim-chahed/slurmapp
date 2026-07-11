@@ -32,6 +32,9 @@
         <li class="list-group-item"><strong>Slurm Job ID:</strong> {{ reservation.slurm_job_id or 'N/A' }}</li>
         <li class="list-group-item"><strong>Created:</strong> {{ reservation.created_at }}</li>
         <li class="list-group-item"><strong>Script:</strong><br><pre class="mt-2 p-3 bg-light">{{ reservation.script }}</pre></li>
+        {% if reservation.output %}
+        <li class="list-group-item"><strong>Output:</strong><br><pre class="mt-2 p-3 bg-light" style="white-space:pre-wrap;word-break:break-word;">{{ reservation.output }}</pre></li>
+        {% endif %}
       </ul>
     </div>
   </div>

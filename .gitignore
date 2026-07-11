@@ -1,0 +1,22 @@
+# Dependencies
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+env/
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Project-specific
+plans/
+debug_archive/

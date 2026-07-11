@@ -1,24 +1,59 @@
 from fastapi import FastAPI, Depends, HTTPException, Request, Form, Query
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 
 from database import engine, SessionLocal, get_db, get_raw_connection
-from models import Base, User, Reservation
+from models import Base, User, Reservation, ClusterResources
 from auth import authenticate_ldap, get_or_create_user, create_jwt, get_current_user, get_current_user_optional
 from slurm_client import submit_slurm_job
-from vm_monitor import get_health, get_downtime, format_downtime
+from vm_monitor import get_health, get_downtime, format_downtime, read_slurm_output
+from slurm_resources import get_node_resources
+from code_runner import run_code
 from config import Config
 
 Base.metadata.create_all(bind=engine)
 
+
+def migrate_db():
+    from sqlalchemy import text, inspect
+    insp = inspect(engine)
+    dialect = engine.dialect.name
+    if dialect == "sqlite":
+        with engine.connect() as conn:
+            cols = [c["name"] for c in insp.get_columns("reservations")]
+            for col in ["language", "mode", "code", "session_expires_at", "slurm_allocation", "output"]:
+                if col not in cols:
+                    conn.execute(text(f"ALTER TABLE reservations ADD COLUMN {col} TEXT"))
+            conn.commit()
+    elif dialect == "mysql":
+        with engine.connect() as conn:
+            cols = [c["name"] for c in insp.get_columns("reservations")]
+            if "language" not in cols:
+                conn.execute(text("ALTER TABLE reservations ADD COLUMN language VARCHAR(20) DEFAULT 'python'"))
+            if "mode" not in cols:
+                conn.execute(text("ALTER TABLE reservations ADD COLUMN mode VARCHAR(20) DEFAULT 'batch'"))
+            if "code" not in cols:
+                conn.execute(text("ALTER TABLE reservations ADD COLUMN code TEXT"))
+            if "session_expires_at" not in cols:
+                conn.execute(text("ALTER TABLE reservations ADD COLUMN session_expires_at DATETIME NULL"))
+            if "slurm_allocation" not in cols:
+                conn.execute(text("ALTER TABLE reservations ADD COLUMN slurm_allocation VARCHAR(100) NULL"))
+            conn.commit()
+
+
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+@app.on_event("startup")
+def startup():
+    migrate_db()
 
 
 PUBLIC_PATHS = {"/", "/login", "/system-down"}
@@ -55,6 +90,14 @@ def get_user_reservations(db: Session, user_id: int, search: str = None):
         return result
     else:
         return db.query(Reservation).filter(Reservation.user_id == user_id).all()
+
+
+def enforce_resources(cpu: int, ram: int, duration: int):
+    if cpu > Config.MAX_CPU or ram > Config.MAX_RAM_GB or duration > Config.MAX_WALLTIME_HOURS:
+        raise HTTPException(400, f"Max allowed: {Config.MAX_CPU} CPU / {Config.MAX_RAM_GB} GB RAM / {Config.MAX_WALLTIME_HOURS}h")
+    res = get_node_resources()
+    if cpu > res["free_cpu"] or ram > res["free_ram_gb"]:
+        raise HTTPException(400, f"Insufficient free resources. Free: {res['free_cpu']} CPU, {res['free_ram_gb']} GB RAM")
 
 
 # ---------- Routes ----------
@@ -123,23 +166,32 @@ async def dashboard(request: Request, search: str = Query(None), db: Session = D
 
 @app.get("/request", response_class=HTMLResponse)
 async def request_form(request: Request, user: User = Depends(get_current_user)):
+    resources = get_node_resources()
     return templates.TemplateResponse(request, "request_form.html", {
         "request": request,
-        "user": user
+        "user": user,
+        "resources": resources,
+        "limits": {"cpu": Config.MAX_CPU, "ram": Config.MAX_RAM_GB, "hours": Config.MAX_WALLTIME_HOURS},
     })
 
 
-@app.post("/request")
+@app.post("/request", response_class=HTMLResponse)
 async def create_reservation(
     request: Request,
     job_name: str = Form(...),
     cpu: int = Form(...),
     ram: int = Form(...),
     duration: int = Form(...),
-    script: str = Form(""),
+    language: str = Form("python"),
+    mode: str = Form("batch"),
+    code: str = Form(""),
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user)
+    user: User = Depends(get_current_user),
 ):
+    from code_runner import build_script
+    import uuid
+    job_id = uuid.uuid4().hex[:8]
+    script = build_script(language, code, cpu, ram, duration, job_id) if mode == "batch" else code
     reservation = Reservation(
         user_id=user.id,
         job_name=job_name,
@@ -147,11 +199,21 @@ async def create_reservation(
         ram=ram,
         duration=duration,
         script=script,
-        status="pending"
+        status="pending",
+        language=language,
+        mode=mode,
+        code=code,
     )
     db.add(reservation)
     db.commit()
     db.refresh(reservation)
+
+    if mode == "editor":
+        from datetime import datetime, timedelta
+        reservation.session_expires_at = datetime.utcnow() + timedelta(minutes=Config.EDITOR_SESSION_MINUTES)
+        db.commit()
+        db.refresh(reservation)
+
     return RedirectResponse(url="/dashboard", status_code=302)
 
 
@@ -179,11 +241,128 @@ async def reservation_detail(
     })
 
 
+@app.get("/editor/{reservation_id}", response_class=HTMLResponse)
+async def editor_page(request: Request, reservation_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    reservation = db.query(Reservation).filter(Reservation.id == reservation_id).first()
+    if not reservation or reservation.user_id != user.id:
+        raise HTTPException(404)
+    if reservation.mode != "editor":
+        raise HTTPException(400, "This reservation is not an editor session")
+    now = datetime.utcnow()
+    started = now < reservation.session_expires_at if reservation.session_expires_at else True
+    remaining = max(0, int((reservation.session_expires_at - now).total_seconds())) if reservation.session_expires_at else 0
+    return templates.TemplateResponse(request, "editor.html", {
+        "request": request,
+        "user": user,
+        "reservation": reservation,
+        "started": started,
+        "remaining_seconds": remaining,
+    })
+
+
+@app.post("/editor/{reservation_id}/run", response_class=HTMLResponse)
+async def editor_run(
+    request: Request,
+    reservation_id: int,
+    code: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    reservation = db.query(Reservation).filter(Reservation.id == reservation_id).first()
+    if not reservation or reservation.user_id != user.id:
+        raise HTTPException(404, "Not found")
+    if reservation.mode != "editor":
+        raise HTTPException(400, "Not an editor session")
+
+    now = datetime.utcnow()
+    if reservation.session_expires_at and now > reservation.session_expires_at:
+        raise HTTPException(403, "Session expired")
+
+    reservation.code = code or reservation.code
+    db.commit()
+    db.refresh(reservation)
+
+    from code_runner import run_code
+    result = run_code(reservation.language, reservation.code, reservation.cpu, reservation.ram, reservation.duration)
+    reservation.slurm_job_id = result.get("job_id")
+    if result.get("success"):
+        reservation.status = "running"
+    else:
+        reservation.status = "failed"
+    raw_output = result.get("output") or result.get("error") or "Job submitted"
+    if reservation.slurm_job_id and reservation.status == "running":
+        actual = read_slurm_output(reservation.slurm_job_id)
+        reservation.output = actual or raw_output
+    else:
+        reservation.output = raw_output
+    db.commit()
+    db.refresh(reservation)
+
+    return RedirectResponse(url=f"/editor/{reservation_id}", status_code=303)
+
+
+@app.get("/editor/{reservation_id}/status")
+async def editor_status(reservation_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    reservation = db.query(Reservation).filter(Reservation.id == reservation_id).first()
+    if not reservation or reservation.user_id != user.id:
+        raise HTTPException(404)
+    return _poll_job_status(reservation, db)
+
+
+@app.get("/reservation/{reservation_id}/status")
+async def reservation_status(reservation_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    reservation = db.query(Reservation).filter(Reservation.id == reservation_id).first()
+    if not reservation or reservation.user_id != user.id:
+        raise HTTPException(404)
+    return _poll_job_status(reservation, db)
+
+
+def _poll_job_status(reservation: Reservation, db: Session) -> dict:
+    data = {
+        "status": reservation.status,
+        "job_id": reservation.slurm_job_id,
+        "output": reservation.output or "",
+    }
+    if not reservation.slurm_job_id:
+        return data
+
+    actual_status = _get_slurm_job_status(reservation.slurm_job_id)
+    if actual_status in ("completed", "failed", "cancelled"):
+        actual_output = read_slurm_output(reservation.slurm_job_id) or reservation.output or ""
+        reservation.output = actual_output
+        reservation.status = actual_status
+        db.commit()
+        db.refresh(reservation)
+        data["status"] = reservation.status
+        data["output"] = reservation.output or ""
+    elif actual_status == "running" and reservation.status != "running":
+        reservation.status = "running"
+        db.commit()
+        db.refresh(reservation)
+        data["status"] = reservation.status
+    return data
+
+
+def _get_slurm_job_status(slurm_job_id: str) -> str:
+    from vm_monitor import _run_ssh
+    ok, out = _run_ssh(f"sacct -j {slurm_job_id} --format=JobID,State 2>/dev/null | tail -n +3 | head -n 1 | awk '{{print $2}}'")
+    if ok and out:
+        state = out.strip().lower()
+        if state in ("completed", "failed", "cancelled", "pending", "running", "completing", "configuring", "failed", "node_fail", "preempted", "resizing", "reverting", "signaling", "special_exit", "stage_out", "stopped", "suspended", "timeout"):
+            return state
+    ok2, out2 = _run_ssh(f"scontrol show job {slurm_job_id} 2>/dev/null | grep -oP 'JobState=\\K[A-Z_]+'")
+    if ok2 and out2:
+        return out2.strip().lower()
+    return "unknown"
+
+
 # ---------- Admin endpoints ----------
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_panel(request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     pending = db.query(Reservation).filter(Reservation.status == "pending").all()
     health = get_health()
+    resources = get_node_resources()
+    print(f"[ADMIN] resources={resources}")
     return templates.TemplateResponse(request, "admin_panel.html", {
         "request": request,
         "pending": pending,
@@ -191,6 +370,7 @@ async def admin_panel(request: Request, db: Session = Depends(get_db), user: Use
         "services": health["services"],
         "overall_up": health["overall_up"],
         "downtime_message": format_downtime(get_downtime()),
+        "resources": resources,
     })
 
 
@@ -203,23 +383,44 @@ async def approve_reservation(
     reservation = db.query(Reservation).filter(Reservation.id == reservation_id).first()
     if not reservation:
         raise HTTPException(status_code=404, detail="Reservation not found")
-    
-    script_content = f"""#!/bin/bash
-#SBATCH --job-name={reservation.job_name}
-#SBATCH --cpus-per-task={reservation.cpu}
-#SBATCH --mem={reservation.ram}G
-#SBATCH --time={reservation.duration}:00:00
 
-{reservation.script}
-"""
-    result = submit_slurm_job(script_content)
-    if result["success"]:
+    print(f"[APPROVE] id={reservation_id} mode={reservation.mode} before status={reservation.status}")
+    if reservation.mode == "editor":
+        from datetime import datetime, timedelta
+        reservation.session_expires_at = datetime.utcnow() + timedelta(minutes=Config.EDITOR_SESSION_MINUTES)
         reservation.status = "approved"
-        reservation.slurm_job_id = result["job_id"]
+        db.commit()
+        db.refresh(reservation)
+        print(f"[APPROVE] editor branch set status approved")
+        return RedirectResponse(url="/admin", status_code=302)
+
+    # batch mode: run immediately via code_runner, capture output
+    from code_runner import run_code
+    result = run_code(reservation.language, reservation.code or reservation.script, reservation.cpu, reservation.ram, reservation.duration)
+    print(f"[APPROVE] batch result={result}")
+    reservation.slurm_job_id = result.get("job_id")
+    if result.get("success"):
+        reservation.status = "running"
     else:
         reservation.status = "failed"
+    raw_output = result.get("output") or result.get("error") or "Job submitted"
+    if reservation.slurm_job_id and reservation.status == "running":
+        actual = read_slurm_output(reservation.slurm_job_id)
+        reservation.output = actual or raw_output
+    else:
+        reservation.output = raw_output
     db.commit()
+    db.refresh(reservation)
+    print(f"[APPROVE] after commit status={reservation.status} output={reservation.output!r}")
     return RedirectResponse(url="/admin", status_code=302)
+
+
+@app.get("/debug/resources")
+async def debug_resources(user: User = Depends(get_current_user)):
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    from slurm_resources import get_node_resources
+    return JSONResponse(get_node_resources())
 
 
 @app.post("/admin/reject/{reservation_id}")

@@ -43,6 +43,18 @@ def _run_ssh(command: str) -> tuple[bool, str]:
         return False, str(e)
 
 
+def read_slurm_output(job_id: str) -> str:
+    if not job_id:
+        return ""
+    ok, out = _run_ssh(f"cat /shared/output_{job_id}.log 2>/dev/null || echo 'NO_OUTPUT'")
+    if ok and out != "NO_OUTPUT":
+        return out
+    ok, out = _run_ssh(f"cat /home/webapp/slurm-{job_id}.out 2>/dev/null || echo 'NO_OUTPUT'")
+    if ok and out != "NO_OUTPUT":
+        return out
+    return ""
+
+
 def _tcp_check(host: str, port: int, timeout: float = 2.0) -> bool:
     try:
         with socket.create_connection((host, port), timeout=timeout):

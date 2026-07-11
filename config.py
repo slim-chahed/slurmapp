@@ -41,3 +41,10 @@ class Config:
     VM_SSH_KEY_PATH = os.getenv("VM_SSH_KEY_PATH", os.path.expanduser("~/.ssh/id_rsa"))
     VM_SSH_PASSPHRASE = os.getenv("VM_SSH_PASSPHRASE", "")
     VM_HEALTH_CACHE_SECONDS = int(os.getenv("VM_HEALTH_CACHE_SECONDS", 30))
+
+    # Catalogue / Editor / Terminal limits
+    MAX_CPU = int(os.getenv("MAX_CPU", 4))
+    MAX_RAM_GB = int(os.getenv("MAX_RAM_GB", 4))
+    MAX_WALLTIME_HOURS = int(os.getenv("MAX_WALLTIME_HOURS", 2))
+    EDITOR_SESSION_MINUTES = int(os.getenv("EDITOR_SESSION_MINUTES", 60))
+    TERMINAL_SESSION_MINUTES = int(os.getenv("TERMINAL_SESSION_MINUTES", 60))
