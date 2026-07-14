@@ -4,11 +4,12 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import func
 from datetime import datetime, timedelta
 import json
 
 from database import engine, SessionLocal, get_db, get_raw_connection
-from models import Base, User, Reservation, ClusterResources
+from models import Base, User, Reservation, ClusterResources, ResourceAllocation
 from auth import authenticate_ldap, get_or_create_user, create_jwt, get_current_user, get_current_user_optional
 from slurm_client import submit_slurm_job
 from vm_monitor import get_health, get_downtime, format_downtime, read_slurm_output
@@ -30,6 +31,33 @@ def migrate_db():
                 if col not in cols:
                     conn.execute(text(f"ALTER TABLE reservations ADD COLUMN {col} TEXT"))
             conn.commit()
+        with engine.connect() as conn:
+            tables = insp.get_table_names()
+            if "cluster_resources" not in tables:
+                conn.execute(text("""
+                    CREATE TABLE cluster_resources (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        total_cpu INTEGER NOT NULL,
+                        free_cpu INTEGER NOT NULL,
+                        total_ram_gb INTEGER NOT NULL,
+                        free_ram_gb INTEGER NOT NULL,
+                        raw TEXT,
+                        recorded_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                """))
+            if "resource_allocations" not in tables:
+                conn.execute(text("""
+                    CREATE TABLE resource_allocations (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        reservation_id INTEGER NOT NULL,
+                        cpu INTEGER NOT NULL,
+                        ram_gb INTEGER NOT NULL,
+                        status VARCHAR(20) NOT NULL DEFAULT 'allocated',
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        released_at DATETIME NULL
+                    )
+                """))
+            conn.commit()
     elif dialect == "mysql":
         with engine.connect() as conn:
             cols = [c["name"] for c in insp.get_columns("reservations")]
@@ -44,6 +72,74 @@ def migrate_db():
             if "slurm_allocation" not in cols:
                 conn.execute(text("ALTER TABLE reservations ADD COLUMN slurm_allocation VARCHAR(100) NULL"))
             conn.commit()
+
+
+def _get_or_create_cluster_resources(db: Session) -> ClusterResources:
+    resources = db.query(ClusterResources).first()
+    if not resources:
+        resources = ClusterResources(
+            total_cpu=Config.MAX_CPU,
+            free_cpu=Config.MAX_CPU,
+            total_ram_gb=Config.MAX_RAM_GB,
+            free_ram_gb=Config.MAX_RAM_GB,
+        )
+        db.add(resources)
+        db.commit()
+        db.refresh(resources)
+    return resources
+
+
+def _allocate_resources(db: Session, reservation_id: int, cpu: int, ram_gb: int) -> bool:
+    resources = _get_or_create_cluster_resources(db)
+    if resources.free_cpu < cpu or resources.free_ram_gb < ram_gb:
+        return False
+    resources.free_cpu -= cpu
+    resources.free_ram_gb -= ram_gb
+    allocation = ResourceAllocation(
+        reservation_id=reservation_id,
+        cpu=cpu,
+        ram_gb=ram_gb,
+        status="allocated",
+    )
+    db.add(allocation)
+    db.commit()
+    return True
+
+
+def _release_resources(db: Session, reservation_id: int) -> None:
+    resources = _get_or_create_cluster_resources(db)
+    allocation = db.query(ResourceAllocation).filter(
+        ResourceAllocation.reservation_id == reservation_id,
+        ResourceAllocation.status == "allocated",
+    ).first()
+    if allocation:
+        resources.free_cpu += allocation.cpu
+        resources.free_ram_gb += allocation.ram_gb
+        allocation.status = "released"
+        allocation.released_at = func.now()
+        db.commit()
+
+
+def _process_queue(db: Session) -> None:
+    queued = db.query(Reservation).filter(Reservation.status == "queued").order_by(Reservation.created_at.asc()).all()
+    for reservation in queued:
+        if _allocate_resources(db, reservation.id, reservation.cpu, reservation.ram):
+            from code_runner import run_code
+            result = run_code(reservation.language, reservation.code or reservation.script, reservation.cpu, reservation.ram, reservation.duration)
+            reservation.slurm_job_id = result.get("job_id")
+            if result.get("success"):
+                reservation.status = "running"
+            else:
+                reservation.status = "failed"
+                _release_resources(db, reservation.id)
+            raw_output = result.get("output") or result.get("error") or "Job submitted"
+            if reservation.slurm_job_id and reservation.status == "running":
+                actual = read_slurm_output(reservation.slurm_job_id)
+                reservation.output = actual or raw_output
+            else:
+                reservation.output = raw_output
+            db.commit()
+            db.refresh(reservation)
 
 
 app = FastAPI()
@@ -92,12 +188,17 @@ def get_user_reservations(db: Session, user_id: int, search: str = None):
         return db.query(Reservation).filter(Reservation.user_id == user_id).all()
 
 
-def enforce_resources(cpu: int, ram: int, duration: int):
+def enforce_resources(cpu: int, ram: int, duration: int, db: Session = None):
     if cpu > Config.MAX_CPU or ram > Config.MAX_RAM_GB or duration > Config.MAX_WALLTIME_HOURS:
         raise HTTPException(400, f"Max allowed: {Config.MAX_CPU} CPU / {Config.MAX_RAM_GB} GB RAM / {Config.MAX_WALLTIME_HOURS}h")
-    res = get_node_resources()
-    if cpu > res["free_cpu"] or ram > res["free_ram_gb"]:
-        raise HTTPException(400, f"Insufficient free resources. Free: {res['free_cpu']} CPU, {res['free_ram_gb']} GB RAM")
+    if db is None:
+        db = SessionLocal()
+    try:
+        res = _get_or_create_cluster_resources(db)
+        if cpu > res.free_cpu or ram > res.free_ram_gb:
+            raise HTTPException(400, f"Insufficient free resources. Free: {res.free_cpu} CPU, {res.free_ram_gb} GB RAM")
+    finally:
+        db.close()
 
 
 # ---------- Routes ----------
@@ -165,8 +266,8 @@ async def dashboard(request: Request, search: str = Query(None), db: Session = D
 
 
 @app.get("/request", response_class=HTMLResponse)
-async def request_form(request: Request, user: User = Depends(get_current_user)):
-    resources = get_node_resources()
+async def request_form(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    resources = _get_or_create_cluster_resources(db)
     return templates.TemplateResponse(request, "request_form.html", {
         "request": request,
         "user": user,
@@ -190,6 +291,7 @@ async def create_reservation(
 ):
     from code_runner import build_script
     import uuid
+    enforce_resources(cpu, ram, duration, db)
     job_id = uuid.uuid4().hex[:8]
     script = build_script(language, code, cpu, ram, duration, job_id) if mode == "batch" else code
     reservation = Reservation(
@@ -331,8 +433,10 @@ def _poll_job_status(reservation: Reservation, db: Session) -> dict:
         actual_output = read_slurm_output(reservation.slurm_job_id) or reservation.output or ""
         reservation.output = actual_output
         reservation.status = actual_status
+        _release_resources(db, reservation.id)
         db.commit()
         db.refresh(reservation)
+        _process_queue(db)
         data["status"] = reservation.status
         data["output"] = reservation.output or ""
     elif actual_status == "running" and reservation.status != "running":
@@ -360,12 +464,14 @@ def _get_slurm_job_status(slurm_job_id: str) -> str:
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_panel(request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     pending = db.query(Reservation).filter(Reservation.status == "pending").all()
+    queued = db.query(Reservation).filter(Reservation.status == "queued").order_by(Reservation.created_at.asc()).all()
     health = get_health()
-    resources = get_node_resources()
-    print(f"[ADMIN] resources={resources}")
+    resources = _get_or_create_cluster_resources(db)
+    _process_queue(db)
     return templates.TemplateResponse(request, "admin_panel.html", {
         "request": request,
         "pending": pending,
+        "queued": queued,
         "user": user,
         "services": health["services"],
         "overall_up": health["overall_up"],
@@ -394,8 +500,16 @@ async def approve_reservation(
         print(f"[APPROVE] editor branch set status approved")
         return RedirectResponse(url="/admin", status_code=302)
 
-    # batch mode: run immediately via code_runner, capture output
+    # batch mode: check static resources first, then run via code_runner
+    if not _allocate_resources(db, reservation.id, reservation.cpu, reservation.ram):
+        reservation.status = "queued"
+        db.commit()
+        db.refresh(reservation)
+        print(f"[APPROVE] not enough resources, queued reservation_id={reservation_id}")
+        return RedirectResponse(url="/admin", status_code=302)
+
     from code_runner import run_code
+    print(f"[APPROVE] reservation_id={reservation_id} cpu={reservation.cpu} ram={reservation.ram} duration={reservation.duration} language={reservation.language}")
     result = run_code(reservation.language, reservation.code or reservation.script, reservation.cpu, reservation.ram, reservation.duration)
     print(f"[APPROVE] batch result={result}")
     reservation.slurm_job_id = result.get("job_id")
@@ -403,6 +517,7 @@ async def approve_reservation(
         reservation.status = "running"
     else:
         reservation.status = "failed"
+        _release_resources(db, reservation.id)
     raw_output = result.get("output") or result.get("error") or "Job submitted"
     if reservation.slurm_job_id and reservation.status == "running":
         actual = read_slurm_output(reservation.slurm_job_id)
@@ -411,16 +526,21 @@ async def approve_reservation(
         reservation.output = raw_output
     db.commit()
     db.refresh(reservation)
-    print(f"[APPROVE] after commit status={reservation.status} output={reservation.output!r}")
+    print(f"[APPROVE] after commit status={reservation.status} slurm_job_id={reservation.slurm_job_id} output={reservation.output!r}")
     return RedirectResponse(url="/admin", status_code=302)
 
 
 @app.get("/debug/resources")
-async def debug_resources(user: User = Depends(get_current_user)):
+async def debug_resources(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
-    from slurm_resources import get_node_resources
-    return JSONResponse(get_node_resources())
+    resources = _get_or_create_cluster_resources(db)
+    return JSONResponse({
+        "total_cpu": resources.total_cpu,
+        "free_cpu": resources.free_cpu,
+        "total_ram_gb": resources.total_ram_gb,
+        "free_ram_gb": resources.free_ram_gb,
+    })
 
 
 @app.post("/admin/reject/{reservation_id}")

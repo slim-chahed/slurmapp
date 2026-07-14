@@ -28,6 +28,7 @@ def submit_slurm_job(script: str) -> dict:
     }
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=20)
+        print(f"[SUBMIT] status={response.status_code} body={response.text[:500]}")
         if response.status_code == 200:
             data = response.json()
             job_id = data.get("job_id")

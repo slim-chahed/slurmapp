@@ -37,7 +37,6 @@ def get_node_resources() -> dict:
     total_cpu = Config.MAX_CPU
     total_ram_gb = Config.MAX_RAM_GB
     alloc_cpu = 0
-    alloc_ram_gb = 0.0
 
     for part in out.replace("\n", " ").split(" "):
         if part.startswith("CPUs=") or part.startswith("CPUTot="):
@@ -55,29 +54,33 @@ def get_node_resources() -> dict:
                 total_ram_gb = int(part.split("=")[1].split(" ")[0]) / 1024
             except Exception:
                 pass
-        if part.startswith("AllocTRES="):
-            tres = part.split("=", 1)[1]
-            for item in tres.split(","):
-                item = item.strip()
-                if item.startswith("mem="):
-                    mem_token = item.split("=", 1)[1].strip()
-                    try:
-                        if mem_token.endswith("M"):
-                            alloc_ram_gb = float(mem_token[:-1]) / 1024
-                        elif mem_token.endswith("G"):
-                            alloc_ram_gb = float(mem_token[:-1])
-                        else:
-                            alloc_ram_gb = float(mem_token) / 1024
-                    except Exception:
-                        alloc_ram_gb = 0.0
 
     free_cpu = max(0, total_cpu - alloc_cpu)
-    free_ram_gb = max(0.0, total_ram_gb - alloc_ram_gb)
+
+    ok_mem, out_mem = _ssh("free -m 2>/dev/null || free 2>/dev/null || true")
+    free_ram_gb = round(total_ram_gb, 1)
+    if ok_mem and out_mem:
+        lines = out_mem.splitlines()
+        for line in lines:
+            if line.startswith("Mem:"):
+                parts = line.split()
+                if len(parts) >= 7:
+                    try:
+                        total_mb = int(parts[1])
+                        used_mb = int(parts[2])
+                        free_mb = int(parts[3])
+                        available_mb = int(parts[6])
+                        total_ram_gb = round(total_mb / 1024, 1)
+                        free_ram_gb = round(available_mb / 1024, 1)
+                    except Exception:
+                        pass
+                break
+
     result = {
         "total_cpu": total_cpu,
         "free_cpu": free_cpu,
         "total_ram_gb": round(total_ram_gb, 1),
-        "free_ram_gb": round(free_ram_gb, 1),
+        "free_ram_gb": free_ram_gb,
         "ok": True,
         "raw": out,
     }

@@ -37,3 +37,14 @@ class ClusterResources(Base):
     free_ram_gb = Column(Integer, nullable=False)
     raw = Column(Text, nullable=True)
     recorded_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class ResourceAllocation(Base):
+    __tablename__ = "resource_allocations"
+    id = Column(Integer, primary_key=True, index=True)
+    reservation_id = Column(Integer, ForeignKey("reservations.id"), nullable=False)
+    cpu = Column(Integer, nullable=False)
+    ram_gb = Column(Integer, nullable=False)
+    status = Column(String(20), nullable=False, default="allocated")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    released_at = Column(DateTime(timezone=True), nullable=True)

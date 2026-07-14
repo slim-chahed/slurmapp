@@ -5,9 +5,9 @@ import base64
 import uuid
 
 LANGUAGE_RUNNERS = {
-    "python": "srun --cpu-bind=cores python3 /shared/input_{job_id}.py",
-    "java": "cd /shared && javac Main_{job_id}.java && srun --cpu-bind=cores java Main_{job_id}",
-    "c": "cd /shared && gcc main_{job_id}.c -o main_{job_id} && srun --cpu-bind=cores ./main_{job_id}",
+    "python": "python3 /shared/input_{job_id}.py",
+    "java": "cd /shared && javac Main_{job_id}.java && java Main_{job_id}",
+    "c": "cd /shared && gcc main_{job_id}.c -o main_{job_id} && ./main_{job_id}",
 }
 
 
@@ -28,7 +28,7 @@ def _write_code_to_vm(language: str, code: str, job_id: str) -> bool:
 
 def build_script(language: str, code: str, cpu: int, ram: int, duration_hours: int, job_id: str) -> str:
     runner = LANGUAGE_RUNNERS[language].format(job_id=job_id)
-    return f"""#!/bin/bash
+    script = f"""#!/bin/bash
 #SBATCH --job-name={language}_job
 #SBATCH --cpus-per-task={cpu}
 #SBATCH --mem={ram}G
@@ -38,12 +38,20 @@ def build_script(language: str, code: str, cpu: int, ram: int, duration_hours: i
 
 {runner}
 """
+    print(f"[BUILD_SCRIPT] job_id={job_id} cpu={cpu} ram={ram} duration={duration_hours} language={language}")
+    print(f"[BUILD_SCRIPT] script=\n{script}")
+    return script
 
 
 def run_code(language: str, code: str, cpu: int, ram: int, duration_hours: int) -> dict:
     job_id = uuid.uuid4().hex[:8]
+    print(f"[RUN_CODE] language={language} cpu={cpu} ram={ram} duration={duration_hours} job_id={job_id}")
     ok = _write_code_to_vm(language, code, job_id)
     if not ok:
+        print(f"[RUN_CODE] write_code FAILED for job_id={job_id}")
         return {"success": False, "error": "Failed to write code to VM /shared"}
     script = build_script(language, code, cpu, ram, duration_hours, job_id)
-    return submit_slurm_job(script)
+    print(f"[RUN_CODE] submitting script for job_id={job_id}")
+    result = submit_slurm_job(script)
+    print(f"[RUN_CODE] submit result={result} for job_id={job_id}")
+    return result
