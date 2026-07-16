@@ -7,7 +7,7 @@
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link href="/static/style.css" rel="stylesheet">
 </head>
-<body>
+<body data-running-count="{{ running|length }}" data-queued-count="{{ queued|length }}">
   <nav class="navbar navbar-expand-lg navbar-esprit">
     <div class="container">
       <a class="navbar-brand" href="/admin">HPC <span>ESPRIT</span></a>
@@ -32,6 +32,16 @@
       {% endif %}
     </div>
 
+    {% set warn_id = request.query_params.get('id') %}
+    {% if request.query_params.get('warning') == 'insufficient_resources' and warn_id %}
+      {% set queued_ids = queued | map(attribute='id') | list %}
+      {% if warn_id | int in queued_ids %}
+      <div class="alert alert-warning" role="alert">
+        <strong>Insufficient resources!</strong> The most recent approval was queued because free CPU/RAM did not meet the job requirements.
+      </div>
+      {% endif %}
+    {% endif %}
+
     <div class="row mb-4">
       <div class="col-md-6">
         <div class="card-esprit p-3">
@@ -48,6 +58,73 @@
       </div>
     </div>
 
+    {% if running %}
+    <h4 class="mt-4">Running Tasks ({{ running|length }})</h4>
+    <table class="table table-bordered table-esprit">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Job Name</th>
+          <th>Language</th>
+          <th>CPU</th>
+          <th>RAM</th>
+          <th>Duration</th>
+          <th>Slurm Job ID</th>
+          <th>Output</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for res in running %}
+        <tr>
+          <td>{{ res.id }}</td>
+          <td>{{ res.job_name }}</td>
+          <td><span class="badge bg-primary">{{ res.language }}</span></td>
+          <td>{{ res.cpu }}</td>
+          <td>{{ res.ram }}</td>
+          <td>{{ res.duration }}</td>
+          <td>{{ res.slurm_job_id or '-' }}</td>
+          <td>{{ res.output or 'No output' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="alert alert-info mt-4">No running tasks.</div>
+    {% endif %}
+
+    {% if queued %}
+    <h4 class="mt-4">Queued Tasks ({{ queued|length }})</h4>
+    <table class="table table-bordered table-esprit">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Job Name</th>
+          <th>Language</th>
+          <th>CPU</th>
+          <th>RAM</th>
+          <th>Duration</th>
+          <th>Reason</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for res in queued %}
+        <tr>
+          <td>{{ res.id }}</td>
+          <td>{{ res.job_name }}</td>
+          <td><span class="badge bg-primary">{{ res.language }}</span></td>
+          <td>{{ res.cpu }}</td>
+          <td>{{ res.ram }}</td>
+          <td>{{ res.duration }}</td>
+          <td>Insufficient free resources at approval time</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="alert alert-info mt-4">No queued tasks.</div>
+    {% endif %}
+
+    <h2 class="mb-3 mt-5">Pending Reservations</h2>
     {% if pending %}
     <table class="table table-bordered table-esprit">
       <thead>
@@ -111,7 +188,11 @@
         console.error('Resource refresh failed:', e);
       }
     }
-    setInterval(refreshResources, 2000);
+    const runningCount = parseInt(document.body.dataset.runningCount || '0');
+    const queuedCount = parseInt(document.body.dataset.queuedCount || '0');
+    if (runningCount > 0 || queuedCount > 0) {
+      setInterval(refreshResources, 2000);
+    }
   </script>
   <footer class="site-footer">
     &copy; HPC Esprit

@@ -191,14 +191,6 @@ def get_user_reservations(db: Session, user_id: int, search: str = None):
 def enforce_resources(cpu: int, ram: int, duration: int, db: Session = None):
     if cpu > Config.MAX_CPU or ram > Config.MAX_RAM_GB or duration > Config.MAX_WALLTIME_HOURS:
         raise HTTPException(400, f"Max allowed: {Config.MAX_CPU} CPU / {Config.MAX_RAM_GB} GB RAM / {Config.MAX_WALLTIME_HOURS}h")
-    if db is None:
-        db = SessionLocal()
-    try:
-        res = _get_or_create_cluster_resources(db)
-        if cpu > res.free_cpu or ram > res.free_ram_gb:
-            raise HTTPException(400, f"Insufficient free resources. Free: {res.free_cpu} CPU, {res.free_ram_gb} GB RAM")
-    finally:
-        db.close()
 
 
 # ---------- Routes ----------
@@ -465,6 +457,7 @@ def _get_slurm_job_status(slurm_job_id: str) -> str:
 async def admin_panel(request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     pending = db.query(Reservation).filter(Reservation.status == "pending").all()
     queued = db.query(Reservation).filter(Reservation.status == "queued").order_by(Reservation.created_at.asc()).all()
+    running = db.query(Reservation).filter(Reservation.status == "running").all()
     health = get_health()
     resources = _get_or_create_cluster_resources(db)
     _process_queue(db)
@@ -472,6 +465,7 @@ async def admin_panel(request: Request, db: Session = Depends(get_db), user: Use
         "request": request,
         "pending": pending,
         "queued": queued,
+        "running": running,
         "user": user,
         "services": health["services"],
         "overall_up": health["overall_up"],
@@ -503,10 +497,11 @@ async def approve_reservation(
     # batch mode: check static resources first, then run via code_runner
     if not _allocate_resources(db, reservation.id, reservation.cpu, reservation.ram):
         reservation.status = "queued"
+        reservation.output = "Insufficient free resources at approval time. Job queued and will run when resources become available."
         db.commit()
         db.refresh(reservation)
         print(f"[APPROVE] not enough resources, queued reservation_id={reservation_id}")
-        return RedirectResponse(url="/admin", status_code=302)
+        return RedirectResponse(url=f"/admin?warning=insufficient_resources&id={reservation_id}", status_code=302)
 
     from code_runner import run_code
     print(f"[APPROVE] reservation_id={reservation_id} cpu={reservation.cpu} ram={reservation.ram} duration={reservation.duration} language={reservation.language}")
