@@ -29,7 +29,7 @@
               <input type="text" name="job_name" class="form-control" required>
             </div>
 
-            <div class="mb-3">
+            <div class="mb-3" id="languageBox">
               <label class="form-label">Language</label>
               <div class="btn-group w-100" role="group">
                 <input type="radio" class="btn-check" name="language" id="lang-python" value="python" checked>
@@ -48,6 +48,7 @@
               <select name="mode" class="form-select" id="modeSelect">
                 <option value="batch">Batch - Paste code and get result after approval</option>
                 <option value="editor">Live Editor - Start a timed Monaco session after approval</option>
+                <option value="terminal">Docker Terminal - Interactive docker terminal session</option>
               </select>
             </div>
 
@@ -94,17 +95,23 @@
   <script>
     const modeSelect = document.getElementById('modeSelect');
     const codeBox = document.getElementById('codeBox');
+    const languageBox = document.getElementById('languageBox');
 
-    function toggleCodeBox() {
+    function toggleFormFields() {
       if (modeSelect.value === 'editor') {
         codeBox.style.display = 'none';
+        languageBox.style.display = 'block';
+      } else if (modeSelect.value === 'terminal') {
+        codeBox.style.display = 'none';
+        languageBox.style.display = 'none';
       } else {
         codeBox.style.display = 'block';
+        languageBox.style.display = 'block';
       }
     }
 
-    toggleCodeBox();
-    modeSelect.addEventListener('change', toggleCodeBox);
+    toggleFormFields();
+    modeSelect.addEventListener('change', toggleFormFields);
   </script>
 </body>
 </html>

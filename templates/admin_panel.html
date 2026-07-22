@@ -21,6 +21,9 @@
   <div class="container mt-4">
     <h2 class="mb-3">Pending Reservations</h2>
     <a href="/dashboard" class="btn btn-secondary mb-3">Back to Dashboard</a>
+    <form method="post" action="/admin/reset-resources" style="display:inline;" onsubmit="return confirm('Reset all static resources to max? This will free all allocated CPU/RAM.');">
+      <button type="submit" class="btn btn-warning mb-3">Reset Static Resources</button>
+    </form>
 
     <div class="card-esprit p-3 mb-4">
       <h5 class="mb-0">System Status</h5>

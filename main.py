@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Request, Form, Query
+from fastapi import FastAPI, Depends, HTTPException, Request, Form, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -7,14 +7,16 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 from datetime import datetime, timedelta
 import json
+import asyncio
 
 from database import engine, SessionLocal, get_db, get_raw_connection
 from models import Base, User, Reservation, ClusterResources, ResourceAllocation
 from auth import authenticate_ldap, get_or_create_user, create_jwt, get_current_user, get_current_user_optional
 from slurm_client import submit_slurm_job
-from vm_monitor import get_health, get_downtime, format_downtime, read_slurm_output
+from vm_monitor import get_health, get_downtime, format_downtime, read_slurm_output, _run_ssh
 from slurm_resources import get_node_resources
 from code_runner import run_code
+from terminal_session import TerminalSession
 from config import Config
 
 Base.metadata.create_all(bind=engine)
@@ -27,7 +29,7 @@ def migrate_db():
     if dialect == "sqlite":
         with engine.connect() as conn:
             cols = [c["name"] for c in insp.get_columns("reservations")]
-            for col in ["language", "mode", "code", "session_expires_at", "slurm_allocation", "output"]:
+            for col in ["language", "mode", "code", "session_expires_at", "slurm_allocation", "output", "terminal_pid"]:
                 if col not in cols:
                     conn.execute(text(f"ALTER TABLE reservations ADD COLUMN {col} TEXT"))
             conn.commit()
@@ -71,6 +73,10 @@ def migrate_db():
                 conn.execute(text("ALTER TABLE reservations ADD COLUMN session_expires_at DATETIME NULL"))
             if "slurm_allocation" not in cols:
                 conn.execute(text("ALTER TABLE reservations ADD COLUMN slurm_allocation VARCHAR(100) NULL"))
+            if "output" not in cols:
+                conn.execute(text("ALTER TABLE reservations ADD COLUMN output TEXT NULL"))
+            if "terminal_pid" not in cols:
+                conn.execute(text("ALTER TABLE reservations ADD COLUMN terminal_pid VARCHAR(50) NULL"))
             conn.commit()
 
 
@@ -120,9 +126,33 @@ def _release_resources(db: Session, reservation_id: int) -> None:
         db.commit()
 
 
+def _release_all_orphaned_resources(db: Session) -> None:
+    resources = _get_or_create_cluster_resources(db)
+    allocations = db.query(ResourceAllocation).filter(ResourceAllocation.status == "allocated").all()
+    released = 0
+    for allocation in allocations:
+        reservation = db.query(Reservation).filter(Reservation.id == allocation.reservation_id).first()
+        if not reservation or reservation.status in ("completed", "failed", "cancelled"):
+            resources.free_cpu += allocation.cpu
+            resources.free_ram_gb += allocation.ram_gb
+            allocation.status = "released"
+            allocation.released_at = func.now()
+            released += 1
+    if released > 0:
+        db.commit()
+
+
 def _process_queue(db: Session) -> None:
     queued = db.query(Reservation).filter(Reservation.status == "queued").order_by(Reservation.created_at.asc()).all()
     for reservation in queued:
+        if reservation.mode == "terminal":
+            if _allocate_resources(db, reservation.id, reservation.cpu, reservation.ram):
+                from datetime import datetime, timedelta
+                reservation.session_expires_at = datetime.utcnow() + timedelta(minutes=Config.EDITOR_SESSION_MINUTES)
+                reservation.status = "approved"
+                db.commit()
+                db.refresh(reservation)
+            continue
         if _allocate_resources(db, reservation.id, reservation.cpu, reservation.ram):
             from code_runner import run_code
             result = run_code(reservation.language, reservation.code or reservation.script, reservation.cpu, reservation.ram, reservation.duration)
@@ -150,6 +180,14 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 @app.on_event("startup")
 def startup():
     migrate_db()
+    db = SessionLocal()
+    try:
+        _release_all_orphaned_resources(db)
+    except Exception:
+        pass
+    finally:
+        db.close()
+    print("[STARTUP] Server started with DinD terminal support")
 
 
 PUBLIC_PATHS = {"/", "/login", "/system-down"}
@@ -188,7 +226,7 @@ def get_user_reservations(db: Session, user_id: int, search: str = None):
         return db.query(Reservation).filter(Reservation.user_id == user_id).all()
 
 
-def enforce_resources(cpu: int, ram: int, duration: int, db: Session = None):
+def enforce_resources(cpu: int, ram: int, duration: int, mode: str = "batch"):
     if cpu > Config.MAX_CPU or ram > Config.MAX_RAM_GB or duration > Config.MAX_WALLTIME_HOURS:
         raise HTTPException(400, f"Max allowed: {Config.MAX_CPU} CPU / {Config.MAX_RAM_GB} GB RAM / {Config.MAX_WALLTIME_HOURS}h")
 
@@ -248,6 +286,7 @@ async def login(request: Request, username: str = Form(...), password: str = For
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request, search: str = Query(None), db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    _release_all_orphaned_resources(db)
     reservations = get_user_reservations(db, user.id, search)
     return templates.TemplateResponse(request, "dashboard.html", {
         "request": request,
@@ -259,6 +298,7 @@ async def dashboard(request: Request, search: str = Query(None), db: Session = D
 
 @app.get("/request", response_class=HTMLResponse)
 async def request_form(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _release_all_orphaned_resources(db)
     resources = _get_or_create_cluster_resources(db)
     return templates.TemplateResponse(request, "request_form.html", {
         "request": request,
@@ -283,9 +323,11 @@ async def create_reservation(
 ):
     from code_runner import build_script
     import uuid
-    enforce_resources(cpu, ram, duration, db)
+    enforce_resources(cpu, ram, duration, mode)
     job_id = uuid.uuid4().hex[:8]
     script = build_script(language, code, cpu, ram, duration, job_id) if mode == "batch" else code
+    if mode == "terminal":
+        language = "docker"
     reservation = Reservation(
         user_id=user.id,
         job_name=job_name,
@@ -417,6 +459,8 @@ def _poll_job_status(reservation: Reservation, db: Session) -> dict:
         "job_id": reservation.slurm_job_id,
         "output": reservation.output or "",
     }
+    if reservation.mode == "terminal":
+        return data
     if not reservation.slurm_job_id:
         return data
 
@@ -452,9 +496,320 @@ def _get_slurm_job_status(slurm_job_id: str) -> str:
     return "unknown"
 
 
+# ---------- Terminal session management ----------
+_active_terminal_sessions: dict[int, TerminalSession] = {}
+
+
+def _get_terminal_session(reservation_id: int) -> TerminalSession | None:
+    return _active_terminal_sessions.get(reservation_id)
+
+
+def _cleanup_terminal_session(reservation_id: int, db: Session = None):
+    session = _active_terminal_sessions.pop(reservation_id, None)
+    if session:
+        session.cleanup()
+    else:
+        container_name = f"terminal_{reservation_id}"
+        try:
+            if db is not None:
+                res = db.query(Reservation).filter(Reservation.id == reservation_id).first()
+                if res and res.slurm_job_id:
+                    from slurm_client import cancel_slurm_job
+                    cancel_slurm_job(res.slurm_job_id)
+        except Exception:
+            pass
+        try:
+            _run_ssh(f"docker rm -f {container_name} 2>/dev/null || true")
+        except Exception:
+            pass
+    if db is not None:
+        _release_resources(db, reservation_id)
+    try:
+        res = db.query(Reservation).filter(Reservation.id == reservation_id).first()
+        if res and res.status == "running":
+            res.status = "completed"
+            try:
+                res.terminal_pid = None
+            except Exception:
+                pass
+            if db:
+                db.commit()
+                db.refresh(res)
+    except Exception:
+        pass
+
+
+def _terminal_is_active(reservation: Reservation) -> bool:
+    if not reservation.session_expires_at:
+        return False
+    now = datetime.utcnow()
+    if now > reservation.session_expires_at:
+        return False
+    session = _get_terminal_session(reservation.id)
+    if session and session.active:
+        return True
+    container_name = f"terminal_{reservation.id}"
+    ok, out = _run_ssh(f"docker ps --filter name={container_name} --format '{{{{.Names}}}}' 2>/dev/null || true")
+    if ok and container_name in out:
+        return True
+    if reservation.slurm_job_id:
+        ok2, out2 = _run_ssh(f"sacct -j {reservation.slurm_job_id} --noheader --format=State 2>/dev/null || true")
+        if ok2 and out2.strip():
+            state = out2.strip().split()[0].lower()
+            if state in ("pending", "running", "configuring", "completing"):
+                return True
+    return False
+
+
+# ---------- Terminal endpoints ----------
+@app.get("/terminal/{reservation_id}", response_class=HTMLResponse)
+async def terminal_page(request: Request, reservation_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    reservation = db.query(Reservation).filter(Reservation.id == reservation_id).first()
+    if not reservation or reservation.user_id != user.id:
+        raise HTTPException(404)
+    if reservation.mode != "terminal":
+        raise HTTPException(400, "This reservation is not a terminal session")
+    now = datetime.utcnow()
+    started = now < reservation.session_expires_at if reservation.session_expires_at else True
+    remaining = max(0, int((reservation.session_expires_at - now).total_seconds())) if reservation.session_expires_at else 0
+    active = _terminal_is_active(reservation)
+    print(f"[TRACE] terminal_page reservation_id={reservation_id} session_expires_at={reservation.session_expires_at} now={now} remaining={remaining} active={active}")
+    return templates.TemplateResponse(request, "terminal.html", {
+        "request": request,
+        "user": user,
+        "reservation": reservation,
+        "started": started,
+        "remaining_seconds": remaining,
+        "active": active,
+    })
+
+
+@app.post("/terminal/{reservation_id}/start")
+async def terminal_start(reservation_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    reservation = db.query(Reservation).filter(Reservation.id == reservation_id).first()
+    if not reservation or reservation.user_id != user.id:
+        raise HTTPException(404)
+    if reservation.mode != "terminal":
+        raise HTTPException(400, "Not a terminal session")
+    if reservation.status not in ("approved", "running"):
+        raise HTTPException(400, "Terminal session not approved yet")
+
+    now = datetime.utcnow()
+    if reservation.session_expires_at and now > reservation.session_expires_at:
+        raise HTTPException(403, "Session expired")
+
+    if reservation_id in _active_terminal_sessions:
+        _cleanup_terminal_session(reservation_id, db)
+
+    session = TerminalSession(
+        reservation_id=reservation_id,
+        cpu=reservation.cpu,
+        ram_gb=reservation.ram,
+        duration_hours=reservation.duration,
+        terminal_type=reservation.language,
+    )
+    result = session.start_slurm_allocation()
+    print(f"[TRACE] terminal_start reservation_id={reservation_id} result={result}")
+    if not result.get("success"):
+        reservation.output = f"TERMINAL_START_ERROR: {result.get('error', 'Unknown error')}"
+        if session.job_id:
+            reservation.slurm_job_id = session.job_id
+        _release_resources(db, reservation.id)
+        db.commit()
+        db.refresh(reservation)
+        return RedirectResponse(url=f"/terminal/{reservation_id}?error=1", status_code=302)
+
+    _active_terminal_sessions[reservation_id] = session
+    reservation.status = "running"
+    reservation.slurm_job_id = session.job_id
+    reservation.session_expires_at = datetime.utcnow() + timedelta(minutes=Config.TERMINAL_SESSION_MINUTES)
+    db.commit()
+    db.refresh(reservation)
+    return RedirectResponse(url=f"/terminal/{reservation_id}", status_code=302)
+
+
+@app.post("/terminal/{reservation_id}/stop")
+async def terminal_stop(reservation_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    reservation = db.query(Reservation).filter(Reservation.id == reservation_id).first()
+    if not reservation or reservation.user_id != user.id:
+        raise HTTPException(404)
+    if reservation.mode != "terminal":
+        raise HTTPException(400, "Not a terminal session")
+
+    _cleanup_terminal_session(reservation_id, db)
+    reservation.status = "completed"
+    try:
+        reservation.terminal_pid = None
+    except Exception:
+        pass
+    db.commit()
+    db.refresh(reservation)
+    return RedirectResponse(url="/dashboard", status_code=302)
+
+
+@app.websocket("/terminal/{reservation_id}/ws")
+async def terminal_ws(websocket: WebSocket, reservation_id: int):
+    await websocket.accept()
+    session = _get_terminal_session(reservation_id)
+
+    if not session or not session.active:
+        db_local = SessionLocal()
+        try:
+            reservation = db_local.query(Reservation).filter(Reservation.id == reservation_id).first()
+            if reservation and reservation.status in ("approved", "running"):
+                new_session = TerminalSession(
+                    reservation_id=reservation_id,
+                    cpu=reservation.cpu,
+                    ram_gb=reservation.ram,
+                    duration_hours=reservation.duration,
+                    terminal_type=reservation.language,
+                    job_id=reservation.slurm_job_id,
+                )
+                result = new_session.connect_to_existing()
+                if result.get("success"):
+                    _active_terminal_sessions[reservation_id] = new_session
+                    session = new_session
+                else:
+                    print(f"[TRACE] ws_connect_failed reservation_id={reservation_id} error={result.get('error')}")
+                    await websocket.send_json({"error": f"Failed to connect: {result.get('error')}"})
+                    await websocket.close()
+                    db_local.close()
+                    return
+            else:
+                print(f"[TRACE] ws_no_active_session reservation_id={reservation_id} status={reservation.status if reservation else 'None'}")
+                await websocket.send_json({"error": "No active terminal session"})
+                await websocket.close()
+                db_local.close()
+                return
+        except Exception as e:
+            print(f"[TRACE] ws_exception reservation_id={reservation_id} error={e}")
+            await websocket.close()
+            db_local.close()
+            return
+        finally:
+            db_local.close()
+
+    try:
+        await websocket.send_json({"status": "connected"})
+    except Exception:
+        await websocket.close()
+        return
+
+    async def read_from_channel():
+        while session.active:
+            try:
+                data = session.read_output()
+                if data:
+                    await websocket.send_json({"output": data})
+            except Exception:
+                break
+            await asyncio.sleep(0.05)
+
+    async def read_from_websocket():
+        while True:
+            try:
+                data = await websocket.receive_text()
+                if session and session.active:
+                    session.send_input(data)
+            except WebSocketDisconnect:
+                break
+            except Exception:
+                break
+
+    reader_task = asyncio.create_task(read_from_channel())
+    writer_task = asyncio.create_task(read_from_websocket())
+
+    done, pending = await asyncio.wait(
+        [reader_task, writer_task],
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    for task in pending:
+        task.cancel()
+
+    if session and session.active:
+        _cleanup_terminal_session(reservation_id)
+    try:
+        await websocket.send_json({"status": "closed", "reason": "Session ended"})
+    except Exception:
+        pass
+
+    await websocket.close()
+
+
+@app.get("/terminal/{reservation_id}/status")
+async def terminal_status(reservation_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    reservation = db.query(Reservation).filter(Reservation.id == reservation_id).first()
+    if not reservation or reservation.user_id != user.id:
+        raise HTTPException(404)
+    if reservation.mode != "terminal":
+        raise HTTPException(400, "Not a terminal session")
+
+    session = _get_terminal_session(reservation_id)
+    active = _terminal_is_active(reservation)
+    remaining = max(0, int((reservation.session_expires_at - datetime.utcnow()).total_seconds())) if reservation.session_expires_at else 0
+    output = session.get_output() if session else reservation.output or ""
+
+    if session and session.is_expired():
+        _cleanup_terminal_session(reservation_id, db)
+        reservation.status = "completed"
+        try:
+            reservation.terminal_pid = None
+        except Exception:
+            pass
+        db.commit()
+        db.refresh(reservation)
+        active = False
+
+    status = reservation.status
+    if active and status != "running":
+        status = "running"
+    elif not active and status == "running":
+        status = "completed"
+
+    return JSONResponse({
+        "status": status,
+        "active": active,
+        "remaining_seconds": remaining,
+        "output": output,
+    })
+
+
+@app.post("/terminal/request", response_class=HTMLResponse)
+async def create_terminal_request(
+    request: Request,
+    job_name: str = Form(...),
+    cpu: int = Form(...),
+    ram: int = Form(...),
+    duration: int = Form(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    enforce_resources(cpu, ram, duration, mode="terminal")
+
+    import uuid
+    job_id = uuid.uuid4().hex[:8]
+    reservation = Reservation(
+        user_id=user.id,
+        job_name=job_name,
+        cpu=cpu,
+        ram=ram,
+        duration=duration,
+        script="",
+        status="pending",
+        language="docker",
+        mode="terminal",
+        code="",
+    )
+    db.add(reservation)
+    db.commit()
+    db.refresh(reservation)
+    return RedirectResponse(url="/dashboard", status_code=302)
+
+
 # ---------- Admin endpoints ----------
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_panel(request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    _release_all_orphaned_resources(db)
     pending = db.query(Reservation).filter(Reservation.status == "pending").all()
     queued = db.query(Reservation).filter(Reservation.status == "queued").order_by(Reservation.created_at.asc()).all()
     running = db.query(Reservation).filter(Reservation.status == "running").all()
@@ -474,6 +829,19 @@ async def admin_panel(request: Request, db: Session = Depends(get_db), user: Use
     })
 
 
+@app.post("/admin/reset-resources")
+async def reset_resources(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    db.query(ResourceAllocation).delete()
+    resources = _get_or_create_cluster_resources(db)
+    resources.free_cpu = Config.MAX_CPU
+    resources.free_ram_gb = Config.MAX_RAM_GB
+    db.commit()
+    db.refresh(resources)
+    return RedirectResponse(url="/admin", status_code=302)
+
+
 @app.post("/admin/approve/{reservation_id}")
 async def approve_reservation(
     reservation_id: int,
@@ -484,14 +852,26 @@ async def approve_reservation(
     if not reservation:
         raise HTTPException(status_code=404, detail="Reservation not found")
 
-    print(f"[APPROVE] id={reservation_id} mode={reservation.mode} before status={reservation.status}")
     if reservation.mode == "editor":
         from datetime import datetime, timedelta
         reservation.session_expires_at = datetime.utcnow() + timedelta(minutes=Config.EDITOR_SESSION_MINUTES)
         reservation.status = "approved"
         db.commit()
         db.refresh(reservation)
-        print(f"[APPROVE] editor branch set status approved")
+        return RedirectResponse(url="/admin", status_code=302)
+
+    if reservation.mode == "terminal":
+        if not _allocate_resources(db, reservation.id, reservation.cpu, reservation.ram):
+            reservation.status = "queued"
+            reservation.output = "Insufficient free resources at approval time. Terminal queued and will run when resources become available."
+            db.commit()
+            db.refresh(reservation)
+            return RedirectResponse(url=f"/admin?warning=insufficient_resources&id={reservation_id}", status_code=302)
+        from datetime import datetime, timedelta
+        reservation.session_expires_at = datetime.utcnow() + timedelta(minutes=Config.EDITOR_SESSION_MINUTES)
+        reservation.status = "approved"
+        db.commit()
+        db.refresh(reservation)
         return RedirectResponse(url="/admin", status_code=302)
 
     # batch mode: check static resources first, then run via code_runner
@@ -500,13 +880,10 @@ async def approve_reservation(
         reservation.output = "Insufficient free resources at approval time. Job queued and will run when resources become available."
         db.commit()
         db.refresh(reservation)
-        print(f"[APPROVE] not enough resources, queued reservation_id={reservation_id}")
         return RedirectResponse(url=f"/admin?warning=insufficient_resources&id={reservation_id}", status_code=302)
 
     from code_runner import run_code
-    print(f"[APPROVE] reservation_id={reservation_id} cpu={reservation.cpu} ram={reservation.ram} duration={reservation.duration} language={reservation.language}")
     result = run_code(reservation.language, reservation.code or reservation.script, reservation.cpu, reservation.ram, reservation.duration)
-    print(f"[APPROVE] batch result={result}")
     reservation.slurm_job_id = result.get("job_id")
     if result.get("success"):
         reservation.status = "running"
@@ -521,7 +898,6 @@ async def approve_reservation(
         reservation.output = raw_output
     db.commit()
     db.refresh(reservation)
-    print(f"[APPROVE] after commit status={reservation.status} slurm_job_id={reservation.slurm_job_id} output={reservation.output!r}")
     return RedirectResponse(url="/admin", status_code=302)
 
 

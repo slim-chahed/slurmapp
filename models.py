@@ -21,12 +21,13 @@ class Reservation(Base):
     slurm_job_id = Column(String(50), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     # Catalogue / Editor / Terminal fields
-    language = Column(String(20), nullable=False, default="python")  # python | java | c
+    language = Column(String(20), nullable=False, default="python")  # python | java | c | docker
     mode = Column(String(20), nullable=False, default="batch")        # batch | editor | terminal
     code = Column(Text, nullable=True)                               # raw user code
     output = Column(Text, nullable=True)                             # execution output
     session_expires_at = Column(DateTime(timezone=True), nullable=True)
     slurm_allocation = Column(String(100), nullable=True)
+    terminal_pid = Column(String(50), nullable=True)                 # persistent terminal/srun session handle
 
 class ClusterResources(Base):
     __tablename__ = "cluster_resources"

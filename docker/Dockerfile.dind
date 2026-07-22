@@ -1,0 +1,15 @@
+FROM docker:dind
+
+RUN apk add --no-cache nano vim
+
+RUN cat > /usr/local/bin/entrypoint.sh << 'EOF'
+#!/bin/sh
+/usr/local/bin/dockerd-entrypoint.sh &
+sleep 2
+while true; do
+    /bin/sh || true
+done
+EOF
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

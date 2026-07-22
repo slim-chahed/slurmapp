@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Terminal - {{ reservation.language|title }} - HPC Esprit</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="/static/style.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/css/xterm-addon-fit.min.css">
+  <style>
+    #terminal-container {
+      height: 500px;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      padding: 10px;
+      border-radius: 4px;
+    }
+    .terminal-header {
+      background: #c8102e;
+      color: white;
+      padding: 10px 15px;
+      border-radius: 4px 4px 0 0;
+      margin-bottom: 0;
+    }
+    .terminal-controls {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    #timer {
+      font-family: monospace;
+      font-size: 1.2em;
+      background: #1a1a1a;
+      color: #00ff00;
+      padding: 5px 15px;
+      border-radius: 4px;
+    }
+    .status-badge {
+      font-size: 0.9em;
+    }
+  </style>
+</head>
+<body>
+  <nav class="navbar navbar-expand-lg navbar-esprit">
+    <div class="container">
+      <a class="navbar-brand" href="/dashboard">HPC <span>ESPRIT</span></a>
+      <div class="ms-auto text-white">
+        {{ user.username }} ({{ user.role }})
+        {% if active %}
+        <form method="post" action="/terminal/{{ reservation.id }}/stop" style="display:inline;" onsubmit="return confirm('End terminal session?');">
+          <button type="submit" class="btn btn-sm btn-esprit-red ms-2">Exit Terminal</button>
+        </form>
+        {% else %}
+        <a href="/dashboard" class="btn btn-sm btn-esprit-red ms-2">Exit Terminal</a>
+        {% endif %}
+      </div>
+    </div>
+  </nav>
+
+  <div class="container mt-4">
+    {% if request.query_params.get('error') %}
+    <div class="alert alert-danger">
+      <strong>Failed to start terminal session.</strong> Please try again or contact admin.
+    </div>
+    {% endif %}
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h2>Docker Terminal</h2>
+      <div class="terminal-controls">
+        <span id="timer" class="badge bg-dark fs-6">00:00:00</span>
+        <span id="statusBadge" class="badge status-badge {% if active %}bg-success{% else %}bg-secondary{% endif %}">
+          {% if active %}Active{% else %}Inactive{% endif %}
+        </span>
+        {% if not active %}
+        <form method="post" action="/terminal/{{ reservation.id }}/start" style="display:inline;">
+          <button type="submit" class="btn btn-esprit-red">Start Session</button>
+        </form>
+        {% else %}
+        <form method="post" action="/terminal/{{ reservation.id }}/stop" style="display:inline;" onsubmit="return confirm('End terminal session?');">
+          <button type="submit" class="btn btn-danger">Stop / Exit</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="terminal-header">
+      <strong>Slurm Terminal Session</strong> - Docker environment
+    </div>
+    <div id="terminal-container"></div>
+
+    <div class="mt-3">
+      <h5>Session Info</h5>
+      <ul class="list-unstyled">
+        <li><strong>Reservation ID:</strong> {{ reservation.id }}</li>
+        <li><strong>CPU:</strong> {{ reservation.cpu }} cores</li>
+        <li><strong>RAM:</strong> {{ reservation.ram }} GB</li>
+        <li><strong>Duration:</strong> {{ reservation.duration }} hours</li>
+        <li><strong>Type:</strong> Docker terminal</li>
+      </ul>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    const reservationId = "{{ reservation.id }}";
+    const remainingSeconds = {{ remaining_seconds }};
+    let term;
+    let socket;
+    let fitAddon;
+    let active = {{ 'true' if active else 'false' }};
+    console.log('Terminal page loaded, active=', active, 'reservationId=', reservationId);
+
+    if (active) {
+      term = new Terminal({
+        cursorBlink: true,
+        fontSize: 14,
+        fontFamily: 'monospace',
+        theme: {
+          background: '#1a1a1a',
+          foreground: '#ffffff',
+          cursor: '#c8102e',
+        },
+      });
+      fitAddon = new FitAddon.FitAddon();
+      term.loadAddon(fitAddon);
+      term.open(document.getElementById('terminal-container'));
+      fitAddon.fit();
+
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/terminal/${reservationId}/ws`;
+      let connectAttempts = 0;
+      const maxAttempts = 5;
+
+      function connectWebSocket() {
+        socket = new WebSocket(wsUrl);
+
+      socket.onopen = () => {
+        console.log('WebSocket open');
+      };
+
+      socket.onmessage = (event) => {
+        console.log('WebSocket message:', event.data);
+        try {
+          const data = JSON.parse(event.data);
+          if (data.status === 'connected') {
+            console.log('Terminal session ready');
+            return;
+          }
+          if (data.output) {
+            term.write(data.output);
+          } else if (data.status === 'closed') {
+            term.write(`\r\n\x1b[31mSession ended: ${data.reason}\x1b[0m\r\n`);
+            socket.close();
+          } else if (data.error) {
+            term.write(`\r\n\x1b[31mError: ${data.error}\x1b[0m\r\n`);
+            socket.close();
+          }
+        } catch (e) {
+          console.error('Failed to parse WebSocket message:', e);
+        }
+      };
+
+      socket.onclose = (event) => {
+        console.log('WebSocket closed:', event.code, event.reason);
+        active = false;
+        statusBadge.textContent = 'Ended';
+        statusBadge.className = 'badge status-badge bg-secondary';
+        clearInterval(interval);
+        timerEl.textContent = '00:00:00';
+        if (term) {
+          term.write('\r\n\x1b[33mConnection closed.\x1b[0m\r\n');
+        }
+      };
+
+      socket.onerror = (err) => {
+        console.error('WebSocket error event:', err);
+        active = false;
+        statusBadge.textContent = 'Error';
+        statusBadge.className = 'badge status-badge bg-danger';
+        clearInterval(interval);
+        if (term) {
+          term.write('\r\n\x1b[31mWebSocket error.\x1b[0m\r\n');
+        }
+      };
+      }
+
+      setTimeout(connectWebSocket, 500);
+
+      term.onData((data) => {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(data);
+        }
+      });
+
+      term.onResize(({ cols, rows }) => {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ resize: { cols, rows } }));
+        }
+      });
+
+      window.addEventListener('resize', () => {
+        if (fitAddon) {
+          fitAddon.fit();
+        }
+      });
+
+      window.addEventListener('beforeunload', () => {
+        if (active) {
+          navigator.sendBeacon(`/terminal/${reservationId}/stop`);
+        }
+      });
+    }
+
+    let timeLeft = remainingSeconds;
+    const timerEl = document.getElementById('timer');
+    const statusBadge = document.getElementById('statusBadge');
+    const interval = setInterval(() => {
+      if (timeLeft <= 0) {
+        timerEl.textContent = 'EXPIRED';
+        statusBadge.textContent = 'Expired';
+        statusBadge.className = 'badge status-badge bg-danger';
+        clearInterval(interval);
+        return;
+      }
+      timeLeft--;
+      const h = String(Math.floor(timeLeft / 3600)).padStart(2, '0');
+      const m = String(Math.floor((timeLeft % 3600) / 60)).padStart(2, '0');
+      const s = String(timeLeft % 60).padStart(2, '0');
+      timerEl.textContent = `${h}:${m}:${s}`;
+    }, 1000);
+
+    async function pollStatus() {
+      try {
+        const res = await fetch(`/terminal/${reservationId}/status`);
+        const data = await res.json();
+        if (!data.active && active) {
+          active = false;
+          statusBadge.textContent = 'Ended';
+          statusBadge.className = 'badge status-badge bg-secondary';
+          if (socket) socket.close();
+          clearInterval(interval);
+          timerEl.textContent = '00:00:00';
+        }
+        if (data.active && !active) {
+          active = true;
+          statusBadge.textContent = 'Active';
+          statusBadge.className = 'badge status-badge bg-success';
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    setInterval(pollStatus, 2000);
+  </script>
+</body>
+</html>

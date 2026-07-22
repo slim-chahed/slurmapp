@@ -64,14 +64,18 @@
           <td>{{ res.cpu }}</td>
           <td>{{ res.ram }}</td>
           <td>{{ res.duration }}</td>
-          <td id="status-{{ res.id }}">{{ res.status }}</td>
+          <td id="status-{{ res.id }}" data-mode="{{ res.mode }}">{{ res.status }}</td>
           <td id="output-{{ res.id }}">
             {% if res.output %}
               <a href="/reservation/{{ res.id }}" class="btn btn-sm btn-outline-secondary">View</a>
             {% else %}
               {% if res.mode == 'editor' and res.status == 'approved' %}
                 <a href="/editor/{{ res.id }}" class="btn btn-sm btn-esprit-red">Start Editor</a>
-              {% elif res.mode == 'editor' %}
+              {% elif res.mode == 'terminal' and res.status == 'approved' %}
+                <form method="post" action="/terminal/{{ res.id }}/start" style="display:inline;">
+                  <button type="submit" class="btn btn-sm btn-esprit-red">Start Terminal</button>
+                </form>
+              {% elif res.mode == 'editor' or res.mode == 'terminal' %}
                 {{ res.status }}
               {% endif %}
             {% endif %}
@@ -90,7 +94,9 @@
     <script>
       async function pollStatus(id) {
         try {
-          const res = await fetch(`/reservation/${id}/status`);
+          const mode = document.querySelector(`#status-${id}`)?.dataset.mode || '';
+          const url = mode === 'terminal' ? `/terminal/${id}/status` : `/reservation/${id}/status`;
+          const res = await fetch(url);
           const data = await res.json();
           const statusCell = document.getElementById(`status-${id}`);
           const outputCell = document.getElementById(`output-${id}`);
@@ -98,7 +104,7 @@
           if (outputCell && data.output && !outputCell.querySelector('a')) {
             outputCell.innerHTML = `<a href="/reservation/${id}" class="btn btn-sm btn-outline-secondary">View</a>`;
           }
-          if (data.status === 'running' || data.status === 'pending') {
+          if (mode !== 'terminal' && (data.status === 'running' || data.status === 'pending')) {
             setTimeout(() => pollStatus(id), 2000);
           }
         } catch (e) {
@@ -108,7 +114,8 @@
       document.addEventListener('DOMContentLoaded', () => {
         document.querySelectorAll('tr').forEach(row => {
           const statusCell = row.querySelector('td:nth-child(8)');
-          if (statusCell && (statusCell.textContent.trim() === 'running' || statusCell.textContent.trim() === 'pending')) {
+          const mode = statusCell ? statusCell.dataset.mode : '';
+          if (statusCell && mode !== 'terminal' && (statusCell.textContent.trim() === 'running' || statusCell.textContent.trim() === 'pending')) {
             const id = row.querySelector('td:first-child')?.textContent.trim();
             if (id) setTimeout(() => pollStatus(id), 2000);
           }
