@@ -1,0 +1,690 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+
+<meta charset="UTF-8">
+
+<title>
+    Bandit Report
+</title>
+
+<style>
+
+html * {
+    font-family: "Arial", sans-serif;
+}
+
+pre {
+    font-family: "Monaco", monospace;
+}
+
+.bordered-box {
+    border: 1px solid black;
+    padding-top:.5em;
+    padding-bottom:.5em;
+    padding-left:1em;
+}
+
+.metrics-box {
+    font-size: 1.1em;
+    line-height: 130%;
+}
+
+.metrics-title {
+    font-size: 1.5em;
+    font-weight: 500;
+    margin-bottom: .25em;
+}
+
+.issue-description {
+    font-size: 1.3em;
+    font-weight: 500;
+}
+
+.candidate-issues {
+    margin-left: 2em;
+    border-left: solid 1px; LightGray;
+    padding-left: 5%;
+    margin-top: .2em;
+    margin-bottom: .2em;
+}
+
+.issue-block {
+    border: 1px solid LightGray;
+    padding-left: .5em;
+    padding-top: .5em;
+    padding-bottom: .5em;
+    margin-bottom: .5em;
+}
+
+.issue-sev-high {
+    background-color: Pink;
+}
+
+.issue-sev-medium {
+    background-color: NavajoWhite;
+}
+
+.issue-sev-low {
+    background-color: LightCyan;
+}
+
+</style>
+</head>
+
+<body>
+
+<div id="metrics">
+    <div class="metrics-box bordered-box">
+        <div class="metrics-title">
+            Metrics:<br>
+        </div>
+        Total lines of code: <span id="loc">1918</span><br>
+        Total lines skipped (#nosec): <span id="nosec">0</span>
+    </div>
+</div>
+
+
+
+
+<br>
+<div id="results">
+    
+<div id="issue-0">
+<div class="issue-block issue-sev-medium">
+    <b>hardcoded_tmp_directory: </b> Probable insecure usage of temp file/directory.<br>
+    <b>Test ID:</b> B108<br>
+    <b>Severity: </b>MEDIUM<br>
+    <b>Confidence: </b>MEDIUM<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/377.html" target="_blank">CWE-377</a><br>
+    <b>File: </b><a href="./config.py" target="_blank">./config.py</a><br>
+    <b>Line number: </b>50<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b108_hardcoded_tmp_directory.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b108_hardcoded_tmp_directory.html</a><br>
+
+<div class="code">
+<pre>
+49	    TERMINAL_HOME = os.getenv(&quot;TERMINAL_HOME&quot;, &quot;/home/terminal_user&quot;)
+50	    TERMINAL_DOCKER_TEMP = os.getenv(&quot;TERMINAL_DOCKER_TEMP&quot;, &quot;/tmp/terminal_workspace&quot;)
+51	
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-1">
+<div class="issue-block issue-sev-low">
+    <b>try_except_pass: </b> Try, Except, Pass detected.<br>
+    <b>Test ID:</b> B110<br>
+    <b>Severity: </b>LOW<br>
+    <b>Confidence: </b>HIGH<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/703.html" target="_blank">CWE-703</a><br>
+    <b>File: </b><a href="./main.py" target="_blank">./main.py</a><br>
+    <b>Line number: </b>186<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html</a><br>
+
+<div class="code">
+<pre>
+185	        _release_all_orphaned_resources(db)
+186	    except Exception:
+187	        pass
+188	    finally:
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-2">
+<div class="issue-block issue-sev-medium">
+    <b>hardcoded_sql_expressions: </b> Possible SQL injection vector through string-based query construction.<br>
+    <b>Test ID:</b> B608<br>
+    <b>Severity: </b>MEDIUM<br>
+    <b>Confidence: </b>LOW<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/89.html" target="_blank">CWE-89</a><br>
+    <b>File: </b><a href="./main.py" target="_blank">./main.py</a><br>
+    <b>Line number: </b>217<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html</a><br>
+
+<div class="code">
+<pre>
+216	        cursor = raw_conn.cursor()
+217	        query = f&quot;SELECT * FROM reservations WHERE user_id = {user_id} AND job_name LIKE &#x27;%{search}%&#x27;&quot;
+218	        cursor.execute(query)
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-3">
+<div class="issue-block issue-sev-low">
+    <b>try_except_pass: </b> Try, Except, Pass detected.<br>
+    <b>Test ID:</b> B110<br>
+    <b>Severity: </b>LOW<br>
+    <b>Confidence: </b>HIGH<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/703.html" target="_blank">CWE-703</a><br>
+    <b>File: </b><a href="./main.py" target="_blank">./main.py</a><br>
+    <b>Line number: </b>519<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html</a><br>
+
+<div class="code">
+<pre>
+518	                    cancel_slurm_job(res.slurm_job_id)
+519	        except Exception:
+520	            pass
+521	        try:
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-4">
+<div class="issue-block issue-sev-low">
+    <b>try_except_pass: </b> Try, Except, Pass detected.<br>
+    <b>Test ID:</b> B110<br>
+    <b>Severity: </b>LOW<br>
+    <b>Confidence: </b>HIGH<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/703.html" target="_blank">CWE-703</a><br>
+    <b>File: </b><a href="./main.py" target="_blank">./main.py</a><br>
+    <b>Line number: </b>523<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html</a><br>
+
+<div class="code">
+<pre>
+522	            _run_ssh(f&quot;docker rm -f {container_name} 2&gt;/dev/null || true&quot;)
+523	        except Exception:
+524	            pass
+525	    if db is not None:
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-5">
+<div class="issue-block issue-sev-low">
+    <b>try_except_pass: </b> Try, Except, Pass detected.<br>
+    <b>Test ID:</b> B110<br>
+    <b>Severity: </b>LOW<br>
+    <b>Confidence: </b>HIGH<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/703.html" target="_blank">CWE-703</a><br>
+    <b>File: </b><a href="./main.py" target="_blank">./main.py</a><br>
+    <b>Line number: </b>533<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html</a><br>
+
+<div class="code">
+<pre>
+532	                res.terminal_pid = None
+533	            except Exception:
+534	                pass
+535	            if db:
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-6">
+<div class="issue-block issue-sev-low">
+    <b>try_except_pass: </b> Try, Except, Pass detected.<br>
+    <b>Test ID:</b> B110<br>
+    <b>Severity: </b>LOW<br>
+    <b>Confidence: </b>HIGH<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/703.html" target="_blank">CWE-703</a><br>
+    <b>File: </b><a href="./main.py" target="_blank">./main.py</a><br>
+    <b>Line number: </b>538<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html</a><br>
+
+<div class="code">
+<pre>
+537	                db.refresh(res)
+538	    except Exception:
+539	        pass
+540	
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-7">
+<div class="issue-block issue-sev-low">
+    <b>try_except_pass: </b> Try, Except, Pass detected.<br>
+    <b>Test ID:</b> B110<br>
+    <b>Severity: </b>LOW<br>
+    <b>Confidence: </b>HIGH<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/703.html" target="_blank">CWE-703</a><br>
+    <b>File: </b><a href="./main.py" target="_blank">./main.py</a><br>
+    <b>Line number: </b>643<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html</a><br>
+
+<div class="code">
+<pre>
+642	        reservation.terminal_pid = None
+643	    except Exception:
+644	        pass
+645	    db.commit()
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-8">
+<div class="issue-block issue-sev-low">
+    <b>try_except_pass: </b> Try, Except, Pass detected.<br>
+    <b>Test ID:</b> B110<br>
+    <b>Severity: </b>LOW<br>
+    <b>Confidence: </b>HIGH<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/703.html" target="_blank">CWE-703</a><br>
+    <b>File: </b><a href="./main.py" target="_blank">./main.py</a><br>
+    <b>Line number: </b>733<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html</a><br>
+
+<div class="code">
+<pre>
+732	        await websocket.send_json({&quot;status&quot;: &quot;closed&quot;, &quot;reason&quot;: &quot;Session ended&quot;})
+733	    except Exception:
+734	        pass
+735	
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-9">
+<div class="issue-block issue-sev-low">
+    <b>try_except_pass: </b> Try, Except, Pass detected.<br>
+    <b>Test ID:</b> B110<br>
+    <b>Severity: </b>LOW<br>
+    <b>Confidence: </b>HIGH<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/703.html" target="_blank">CWE-703</a><br>
+    <b>File: </b><a href="./main.py" target="_blank">./main.py</a><br>
+    <b>Line number: </b>757<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html</a><br>
+
+<div class="code">
+<pre>
+756	            reservation.terminal_pid = None
+757	        except Exception:
+758	            pass
+759	        db.commit()
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-10">
+<div class="issue-block issue-sev-low">
+    <b>try_except_pass: </b> Try, Except, Pass detected.<br>
+    <b>Test ID:</b> B110<br>
+    <b>Severity: </b>LOW<br>
+    <b>Confidence: </b>HIGH<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/703.html" target="_blank">CWE-703</a><br>
+    <b>File: </b><a href="./plans/test_script.py" target="_blank">./plans/test_script.py</a><br>
+    <b>Line number: </b>9<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html</a><br>
+
+<div class="code">
+<pre>
+8	            pass
+9	    except Exception:
+10	        pass
+11	    print(f&quot;[worker {worker_id}] PID={pid} target_cpus={cpu_target} mem_limit={mem_mb}MB&quot;)
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-11">
+<div class="issue-block issue-sev-high">
+    <b>ssh_no_host_key_verification: </b> Paramiko call with policy set to automatically trust the unknown host key.<br>
+    <b>Test ID:</b> B507<br>
+    <b>Severity: </b>HIGH<br>
+    <b>Confidence: </b>MEDIUM<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/295.html" target="_blank">CWE-295</a><br>
+    <b>File: </b><a href="./slurm_resources.py" target="_blank">./slurm_resources.py</a><br>
+    <b>Line number: </b>8<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b507_ssh_no_host_key_verification.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b507_ssh_no_host_key_verification.html</a><br>
+
+<div class="code">
+<pre>
+7	        client = paramiko.SSHClient()
+8	        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+9	        client.connect(
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-12">
+<div class="issue-block issue-sev-medium">
+    <b>paramiko_calls: </b> Possible shell injection via Paramiko call, check inputs are properly sanitized.<br>
+    <b>Test ID:</b> B601<br>
+    <b>Severity: </b>MEDIUM<br>
+    <b>Confidence: </b>MEDIUM<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/78.html" target="_blank">CWE-78</a><br>
+    <b>File: </b><a href="./slurm_resources.py" target="_blank">./slurm_resources.py</a><br>
+    <b>Line number: </b>16<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b601_paramiko_calls.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b601_paramiko_calls.html</a><br>
+
+<div class="code">
+<pre>
+15	        )
+16	        _, stdout, _ = client.exec_command(cmd, timeout=10)
+17	        out = stdout.read().decode(&quot;utf-8&quot;, errors=&quot;replace&quot;).strip()
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-13">
+<div class="issue-block issue-sev-low">
+    <b>try_except_pass: </b> Try, Except, Pass detected.<br>
+    <b>Test ID:</b> B110<br>
+    <b>Severity: </b>LOW<br>
+    <b>Confidence: </b>HIGH<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/703.html" target="_blank">CWE-703</a><br>
+    <b>File: </b><a href="./slurm_resources.py" target="_blank">./slurm_resources.py</a><br>
+    <b>Line number: </b>45<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html</a><br>
+
+<div class="code">
+<pre>
+44	                total_cpu = int(part.split(&quot;=&quot;)[1].split(&quot; &quot;)[0])
+45	            except Exception:
+46	                pass
+47	        if part.startswith(&quot;CPUAlloc=&quot;):
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-14">
+<div class="issue-block issue-sev-low">
+    <b>try_except_pass: </b> Try, Except, Pass detected.<br>
+    <b>Test ID:</b> B110<br>
+    <b>Severity: </b>LOW<br>
+    <b>Confidence: </b>HIGH<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/703.html" target="_blank">CWE-703</a><br>
+    <b>File: </b><a href="./slurm_resources.py" target="_blank">./slurm_resources.py</a><br>
+    <b>Line number: </b>50<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html</a><br>
+
+<div class="code">
+<pre>
+49	                alloc_cpu = int(part.split(&quot;=&quot;)[1].split(&quot; &quot;)[0])
+50	            except Exception:
+51	                pass
+52	        if part.startswith(&quot;RealMemory=&quot;):
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-15">
+<div class="issue-block issue-sev-low">
+    <b>try_except_pass: </b> Try, Except, Pass detected.<br>
+    <b>Test ID:</b> B110<br>
+    <b>Severity: </b>LOW<br>
+    <b>Confidence: </b>HIGH<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/703.html" target="_blank">CWE-703</a><br>
+    <b>File: </b><a href="./slurm_resources.py" target="_blank">./slurm_resources.py</a><br>
+    <b>Line number: </b>55<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html</a><br>
+
+<div class="code">
+<pre>
+54	                total_ram_gb = int(part.split(&quot;=&quot;)[1].split(&quot; &quot;)[0]) / 1024
+55	            except Exception:
+56	                pass
+57	
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-16">
+<div class="issue-block issue-sev-low">
+    <b>try_except_pass: </b> Try, Except, Pass detected.<br>
+    <b>Test ID:</b> B110<br>
+    <b>Severity: </b>LOW<br>
+    <b>Confidence: </b>HIGH<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/703.html" target="_blank">CWE-703</a><br>
+    <b>File: </b><a href="./slurm_resources.py" target="_blank">./slurm_resources.py</a><br>
+    <b>Line number: </b>75<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html</a><br>
+
+<div class="code">
+<pre>
+74	                        free_ram_gb = round(available_mb / 1024, 1)
+75	                    except Exception:
+76	                        pass
+77	                break
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-17">
+<div class="issue-block issue-sev-high">
+    <b>ssh_no_host_key_verification: </b> Paramiko call with policy set to automatically trust the unknown host key.<br>
+    <b>Test ID:</b> B507<br>
+    <b>Severity: </b>HIGH<br>
+    <b>Confidence: </b>MEDIUM<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/295.html" target="_blank">CWE-295</a><br>
+    <b>File: </b><a href="./terminal_session.py" target="_blank">./terminal_session.py</a><br>
+    <b>Line number: </b>28<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b507_ssh_no_host_key_verification.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b507_ssh_no_host_key_verification.html</a><br>
+
+<div class="code">
+<pre>
+27	        client = paramiko.SSHClient()
+28	        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+29	        client.connect(
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-18">
+<div class="issue-block issue-sev-low">
+    <b>try_except_pass: </b> Try, Except, Pass detected.<br>
+    <b>Test ID:</b> B110<br>
+    <b>Severity: </b>LOW<br>
+    <b>Confidence: </b>HIGH<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/703.html" target="_blank">CWE-703</a><br>
+    <b>File: </b><a href="./terminal_session.py" target="_blank">./terminal_session.py</a><br>
+    <b>Line number: </b>119<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html</a><br>
+
+<div class="code">
+<pre>
+118	            time.sleep(1)
+119	        except Exception:
+120	            pass
+121	
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-19">
+<div class="issue-block issue-sev-low">
+    <b>try_except_pass: </b> Try, Except, Pass detected.<br>
+    <b>Test ID:</b> B110<br>
+    <b>Severity: </b>LOW<br>
+    <b>Confidence: </b>HIGH<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/703.html" target="_blank">CWE-703</a><br>
+    <b>File: </b><a href="./terminal_session.py" target="_blank">./terminal_session.py</a><br>
+    <b>Line number: </b>201<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html</a><br>
+
+<div class="code">
+<pre>
+200	                cancel_slurm_job(self.job_id)
+201	            except Exception:
+202	                pass
+203	        try:
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-20">
+<div class="issue-block issue-sev-low">
+    <b>try_except_pass: </b> Try, Except, Pass detected.<br>
+    <b>Test ID:</b> B110<br>
+    <b>Severity: </b>LOW<br>
+    <b>Confidence: </b>HIGH<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/703.html" target="_blank">CWE-703</a><br>
+    <b>File: </b><a href="./terminal_session.py" target="_blank">./terminal_session.py</a><br>
+    <b>Line number: </b>205<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html</a><br>
+
+<div class="code">
+<pre>
+204	            _run_ssh(f&quot;docker rm -f {self.container_name} 2&gt;/dev/null || true&quot;)
+205	        except Exception:
+206	            pass
+207	        if self.channel:
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-21">
+<div class="issue-block issue-sev-low">
+    <b>try_except_pass: </b> Try, Except, Pass detected.<br>
+    <b>Test ID:</b> B110<br>
+    <b>Severity: </b>LOW<br>
+    <b>Confidence: </b>HIGH<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/703.html" target="_blank">CWE-703</a><br>
+    <b>File: </b><a href="./terminal_session.py" target="_blank">./terminal_session.py</a><br>
+    <b>Line number: </b>210<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html</a><br>
+
+<div class="code">
+<pre>
+209	                self.channel.close()
+210	            except Exception:
+211	                pass
+212	        if self.client:
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-22">
+<div class="issue-block issue-sev-low">
+    <b>try_except_pass: </b> Try, Except, Pass detected.<br>
+    <b>Test ID:</b> B110<br>
+    <b>Severity: </b>LOW<br>
+    <b>Confidence: </b>HIGH<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/703.html" target="_blank">CWE-703</a><br>
+    <b>File: </b><a href="./terminal_session.py" target="_blank">./terminal_session.py</a><br>
+    <b>Line number: </b>215<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html</a><br>
+
+<div class="code">
+<pre>
+214	                self.client.close()
+215	            except Exception:
+216	                pass
+217	
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-23">
+<div class="issue-block issue-sev-high">
+    <b>ssh_no_host_key_verification: </b> Paramiko call with policy set to automatically trust the unknown host key.<br>
+    <b>Test ID:</b> B507<br>
+    <b>Severity: </b>HIGH<br>
+    <b>Confidence: </b>MEDIUM<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/295.html" target="_blank">CWE-295</a><br>
+    <b>File: </b><a href="./vm_monitor.py" target="_blank">./vm_monitor.py</a><br>
+    <b>Line number: </b>22<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b507_ssh_no_host_key_verification.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b507_ssh_no_host_key_verification.html</a><br>
+
+<div class="code">
+<pre>
+21	    client = paramiko.SSHClient()
+22	    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+23	    client.connect(
+</pre>
+</div>
+
+
+</div>
+</div>
+
+<div id="issue-24">
+<div class="issue-block issue-sev-medium">
+    <b>paramiko_calls: </b> Possible shell injection via Paramiko call, check inputs are properly sanitized.<br>
+    <b>Test ID:</b> B601<br>
+    <b>Severity: </b>MEDIUM<br>
+    <b>Confidence: </b>MEDIUM<br>
+    <b>CWE: </b><a href="https://cwe.mitre.org/data/definitions/78.html" target="_blank">CWE-78</a><br>
+    <b>File: </b><a href="./vm_monitor.py" target="_blank">./vm_monitor.py</a><br>
+    <b>Line number: </b>37<br>
+    <b>More info: </b><a href="https://bandit.readthedocs.io/en/1.9.4/plugins/b601_paramiko_calls.html" target="_blank">https://bandit.readthedocs.io/en/1.9.4/plugins/b601_paramiko_calls.html</a><br>
+
+<div class="code">
+<pre>
+36	        client = _ssh_client()
+37	        stdin, stdout, stderr = client.exec_command(command, timeout=10)
+38	        out = stdout.read().decode(&quot;utf-8&quot;, errors=&quot;replace&quot;)
+</pre>
+</div>
+
+
+</div>
+</div>
+
+</div>
+
+</body>
+</html>
