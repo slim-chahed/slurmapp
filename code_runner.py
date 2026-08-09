@@ -18,12 +18,20 @@ def _write_code_to_vm(language: str, code: str, job_id: str) -> bool:
         "c": f"main_{job_id}.c",
     }
     filename = filename_map[language]
+    if language == "java":
+        code = _patch_java_class_name(code, filename.replace(".java", ""))
     encoded = base64.b64encode(code.encode("utf-8")).decode("ascii")
     ok, out = _run_ssh(f"echo '{encoded}' | base64 -d > /shared/{filename}")
     if not ok:
         return False
     ok2, out2 = _run_ssh(f"chmod 644 /shared/{filename}")
     return ok2
+
+
+def _patch_java_class_name(code: str, class_name: str) -> str:
+    import re
+    patched = re.sub(r"public\s+class\s+\w+", f"public class {class_name}", code)
+    return patched
 
 
 def build_script(language: str, code: str, cpu: int, ram: int, duration_hours: int, job_id: str) -> str:

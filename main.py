@@ -214,8 +214,10 @@ def get_user_reservations(db: Session, user_id: int, search: str = None):
     if search:
         raw_conn = get_raw_connection()
         cursor = raw_conn.cursor()
-        query = f"SELECT * FROM reservations WHERE user_id = {user_id} AND job_name LIKE '%{search}%'"
-        cursor.execute(query)
+        cursor.execute(
+            "SELECT * FROM reservations WHERE user_id = %s AND job_name LIKE %s",
+            (user_id, f"%{search}%"),
+        )
         rows = cursor.fetchall()
         columns = ['id', 'user_id', 'job_name', 'cpu', 'ram', 'duration', 'script', 'status', 'slurm_job_id', 'created_at']
         result = [dict(zip(columns, row)) for row in rows]
@@ -286,12 +288,14 @@ async def login(request: Request, username: str = Form(...), password: str = For
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request, search: str = Query(None), db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    from sanitize import sanitize_text
     _release_all_orphaned_resources(db)
-    reservations = get_user_reservations(db, user.id, search)
+    safe_search = sanitize_text(search or "", max_length=100) if search else None
+    reservations = get_user_reservations(db, user.id, safe_search)
     return templates.TemplateResponse(request, "dashboard.html", {
         "request": request,
         "reservations": reservations,
-        "search": search,
+        "search": safe_search,
         "user": user
     })
 
@@ -322,7 +326,12 @@ async def create_reservation(
     user: User = Depends(get_current_user),
 ):
     from code_runner import build_script
+    from sanitize import validate_job_name, validate_code_input
     import uuid
+
+    job_name = validate_job_name(job_name)
+    code = validate_code_input(code)
+
     enforce_resources(cpu, ram, duration, mode)
     job_id = uuid.uuid4().hex[:8]
     script = build_script(language, code, cpu, ram, duration, job_id) if mode == "batch" else code
@@ -385,6 +394,10 @@ async def editor_page(request: Request, reservation_id: int, db: Session = Depen
     if reservation.mode != "editor":
         raise HTTPException(400, "This reservation is not an editor session")
     now = datetime.utcnow()
+    if not reservation.session_expires_at or now > reservation.session_expires_at:
+        reservation.session_expires_at = now + timedelta(minutes=Config.EDITOR_SESSION_MINUTES)
+        db.commit()
+        db.refresh(reservation)
     started = now < reservation.session_expires_at if reservation.session_expires_at else True
     remaining = max(0, int((reservation.session_expires_at - now).total_seconds())) if reservation.session_expires_at else 0
     return templates.TemplateResponse(request, "editor.html", {
@@ -404,6 +417,7 @@ async def editor_run(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    from sanitize import validate_code_input, sanitize_code_output
     reservation = db.query(Reservation).filter(Reservation.id == reservation_id).first()
     if not reservation or reservation.user_id != user.id:
         raise HTTPException(404, "Not found")
@@ -414,7 +428,7 @@ async def editor_run(
     if reservation.session_expires_at and now > reservation.session_expires_at:
         raise HTTPException(403, "Session expired")
 
-    reservation.code = code or reservation.code
+    reservation.code = validate_code_input(code or reservation.code)
     db.commit()
     db.refresh(reservation)
 
@@ -428,9 +442,9 @@ async def editor_run(
     raw_output = result.get("output") or result.get("error") or "Job submitted"
     if reservation.slurm_job_id and reservation.status == "running":
         actual = read_slurm_output(reservation.slurm_job_id)
-        reservation.output = actual or raw_output
+        reservation.output = sanitize_code_output(actual or raw_output)
     else:
-        reservation.output = raw_output
+        reservation.output = sanitize_code_output(raw_output)
     db.commit()
     db.refresh(reservation)
 
@@ -454,10 +468,11 @@ async def reservation_status(reservation_id: int, db: Session = Depends(get_db),
 
 
 def _poll_job_status(reservation: Reservation, db: Session) -> dict:
+    from sanitize import sanitize_code_output
     data = {
         "status": reservation.status,
         "job_id": reservation.slurm_job_id,
-        "output": reservation.output or "",
+        "output": sanitize_code_output(reservation.output or ""),
     }
     if reservation.mode == "terminal":
         return data
@@ -467,14 +482,14 @@ def _poll_job_status(reservation: Reservation, db: Session) -> dict:
     actual_status = _get_slurm_job_status(reservation.slurm_job_id)
     if actual_status in ("completed", "failed", "cancelled"):
         actual_output = read_slurm_output(reservation.slurm_job_id) or reservation.output or ""
-        reservation.output = actual_output
+        reservation.output = sanitize_code_output(actual_output)
         reservation.status = actual_status
         _release_resources(db, reservation.id)
         db.commit()
         db.refresh(reservation)
         _process_queue(db)
         data["status"] = reservation.status
-        data["output"] = reservation.output or ""
+        data["output"] = sanitize_code_output(reservation.output or "")
     elif actual_status == "running" and reservation.status != "running":
         reservation.status = "running"
         db.commit()
@@ -505,10 +520,13 @@ def _get_terminal_session(reservation_id: int) -> TerminalSession | None:
 
 
 def _cleanup_terminal_session(reservation_id: int, db: Session = None):
+    print(f"[TRACE] _cleanup_terminal_session reservation_id={reservation_id}")
     session = _active_terminal_sessions.pop(reservation_id, None)
     if session:
+        print(f"[TRACE] cleanup session found for {reservation_id}")
         session.cleanup()
     else:
+        print(f"[TRACE] no active session for {reservation_id}, cleaning container directly")
         container_name = f"terminal_{reservation_id}"
         try:
             if db is not None:
@@ -630,12 +648,17 @@ async def terminal_start(reservation_id: int, db: Session = Depends(get_db), use
 
 @app.post("/terminal/{reservation_id}/stop")
 async def terminal_stop(reservation_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    print(f"[TRACE] terminal_stop START reservation_id={reservation_id}")
     reservation = db.query(Reservation).filter(Reservation.id == reservation_id).first()
+    print(f"[TRACE] terminal_stop reservation found={reservation is not None}")
     if not reservation or reservation.user_id != user.id:
+        print(f"[TRACE] terminal_stop ABORT 404")
         raise HTTPException(404)
     if reservation.mode != "terminal":
+        print(f"[TRACE] terminal_stop ABORT 400 mode={reservation.mode}")
         raise HTTPException(400, "Not a terminal session")
 
+    print(f"[TRACE] terminal_stop CLEANUP start")
     _cleanup_terminal_session(reservation_id, db)
     reservation.status = "completed"
     try:
@@ -644,7 +667,14 @@ async def terminal_stop(reservation_id: int, db: Session = Depends(get_db), user
         pass
     db.commit()
     db.refresh(reservation)
+    print(f"[TRACE] terminal_stop CLEANUP done")
     return RedirectResponse(url="/dashboard", status_code=302)
+
+
+@app.get("/terminal/{reservation_id}/stop")
+async def terminal_stop_get(reservation_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    print(f"[TRACE] terminal_stop GET reservation_id={reservation_id}")
+    return await terminal_stop(reservation_id, db, user)
 
 
 @app.websocket("/terminal/{reservation_id}/ws")
@@ -747,7 +777,8 @@ async def terminal_status(reservation_id: int, db: Session = Depends(get_db), us
     session = _get_terminal_session(reservation_id)
     active = _terminal_is_active(reservation)
     remaining = max(0, int((reservation.session_expires_at - datetime.utcnow()).total_seconds())) if reservation.session_expires_at else 0
-    output = session.get_output() if session else reservation.output or ""
+    from sanitize import sanitize_code_output
+    output = sanitize_code_output(session.get_output() if session else reservation.output or "")
 
     if session and session.is_expired():
         _cleanup_terminal_session(reservation_id, db)
@@ -784,10 +815,12 @@ async def create_terminal_request(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    from sanitize import validate_job_name
     enforce_resources(cpu, ram, duration, mode="terminal")
 
     import uuid
     job_id = uuid.uuid4().hex[:8]
+    job_name = validate_job_name(job_name)
     reservation = Reservation(
         user_id=user.id,
         job_name=job_name,

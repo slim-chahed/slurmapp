@@ -49,9 +49,7 @@
       <div class="ms-auto text-white">
         {{ user.username }} ({{ user.role }})
         {% if active %}
-        <form method="post" action="/terminal/{{ reservation.id }}/stop" style="display:inline;" onsubmit="return confirm('End terminal session?');">
-          <button type="submit" class="btn btn-sm btn-esprit-red ms-2">Exit Terminal</button>
-        </form>
+        <a href="/terminal/{{ reservation.id }}/stop" class="btn btn-sm btn-esprit-red ms-2">Exit Terminal</a>
         {% else %}
         <a href="/dashboard" class="btn btn-sm btn-esprit-red ms-2">Exit Terminal</a>
         {% endif %}
@@ -75,10 +73,6 @@
         {% if not active %}
         <form method="post" action="/terminal/{{ reservation.id }}/start" style="display:inline;">
           <button type="submit" class="btn btn-esprit-red">Start Session</button>
-        </form>
-        {% else %}
-        <form method="post" action="/terminal/{{ reservation.id }}/stop" style="display:inline;" onsubmit="return confirm('End terminal session?');">
-          <button type="submit" class="btn btn-danger">Stop / Exit</button>
         </form>
         {% endif %}
       </div>
