@@ -9,3 +9,4 @@ pyjwt
 requests
 jinja2
 paramiko
+itsdangerous

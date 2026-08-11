@@ -1,4 +1,5 @@
 import os
+import tempfile
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -45,9 +46,14 @@ class Config:
     # Terminal restricted user
     TERMINAL_SSH_USER = os.getenv("TERMINAL_SSH_USER", "terminal_user")
     TERMINAL_SSH_KEY_PATH = os.getenv("TERMINAL_SSH_KEY_PATH", os.path.expanduser("~/.ssh/id_rsa_hpc"))
-    TERMINAL_SSH_PASSPHRASE = os.getenv("TERMINAL_SSH_PASSPHRASE", "Password*123")
+    TERMINAL_SSH_PASSPHRASE = os.getenv("TERMINAL_SSH_PASSPHRASE", "")
     TERMINAL_HOME = os.getenv("TERMINAL_HOME", "/home/terminal_user")
-    TERMINAL_DOCKER_TEMP = os.getenv("TERMINAL_DOCKER_TEMP", "/tmp/terminal_workspace")
+    _TERMINAL_DOCKER_TEMP = os.getenv("TERMINAL_DOCKER_TEMP")
+    if _TERMINAL_DOCKER_TEMP:
+        TERMINAL_DOCKER_TEMP = _TERMINAL_DOCKER_TEMP
+    else:
+        _tmp = tempfile.mkdtemp(prefix="terminal_workspace_")
+        TERMINAL_DOCKER_TEMP = _tmp
 
     # Catalogue / Editor / Terminal limits
     MAX_CPU = int(os.getenv("MAX_CPU", 4))

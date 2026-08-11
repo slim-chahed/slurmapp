@@ -1,9 +1,13 @@
 import paramiko
 import queue
 import time
+import logging
+import os
 from datetime import datetime, timedelta
 from config import Config
 from vm_monitor import _run_ssh
+
+logger = logging.getLogger(__name__)
 
 
 class TerminalSession:
@@ -25,7 +29,10 @@ class TerminalSession:
 
     def _ssh_client(self):
         client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        known_hosts = os.path.expanduser("~/.ssh/known_hosts")
+        if os.path.exists(known_hosts):
+            client.load_host_keys(known_hosts)
+        client.set_missing_host_key_policy(paramiko.RejectPolicy())
         client.connect(
             hostname=Config.VM_HOST,
             port=Config.VM_SSH_PORT,
@@ -110,14 +117,15 @@ exit 0
 
             return self._connect_to_container()
         except Exception as e:
+            logger.error(f"Failed to start slurm allocation for terminal {self.reservation_id}: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
     def _cleanup_existing_container(self) -> None:
         try:
             _run_ssh(f"docker rm -f {self.container_name} 2>/dev/null || true")
             time.sleep(1)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not cleanup existing container {self.container_name}: {e}")
 
     def _wait_for_slurm_job(self) -> None:
         while True:
@@ -143,13 +151,14 @@ exit 0
             self._wait_for_container()
             return self._connect_to_container()
         except Exception as e:
+            logger.error(f"Failed to connect to existing container for terminal {self.reservation_id}: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
     def _connect_to_container(self) -> dict:
         self.client = self._ssh_client()
         self.client.get_transport().set_keepalive(30)
         self.channel = self.client.invoke_shell(term="xterm-256color", width=120, height=40)
-        self.channel.send(f"docker exec -it {self.container_name} sh -c 'while true; do /bin/sh || true; done'\n")
+        self.channel.send(f"docker exec -it {self.container_name} sh -c 'while true; do /bin/sh || /bin/bash || true; done'\n")
 
         self.active = True
         self.start_time = datetime.utcnow()
@@ -168,7 +177,8 @@ exit 0
         if self.channel and self.active:
             try:
                 self.channel.send(data)
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Could not send input to terminal {self.reservation_id}: {e}")
                 self.active = False
 
     def read_output(self) -> str:
@@ -179,7 +189,8 @@ exit 0
                 data = self.channel.recv(4096).decode("utf-8", errors="replace")
                 self.output_buffer.append(data)
                 return data
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Could not read output from terminal {self.reservation_id}: {e}")
             self.active = False
         return ""
 
@@ -198,22 +209,22 @@ exit 0
             try:
                 from slurm_client import cancel_slurm_job
                 cancel_slurm_job(self.job_id)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Could not cancel slurm job {self.job_id} for terminal {self.reservation_id}: {e}")
         try:
             _run_ssh(f"docker rm -f {self.container_name} 2>/dev/null || true")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not remove container {self.container_name}: {e}")
         if self.channel:
             try:
                 self.channel.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Could not close channel for terminal {self.reservation_id}: {e}")
         if self.client:
             try:
                 self.client.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Could not close SSH client for terminal {self.reservation_id}: {e}")
 
     def get_output(self) -> str:
         return "".join(self.output_buffer)

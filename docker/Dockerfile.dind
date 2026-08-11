@@ -7,7 +7,7 @@ RUN cat > /usr/local/bin/entrypoint.sh << 'EOF'
 /usr/local/bin/dockerd-entrypoint.sh &
 sleep 2
 while true; do
-    /bin/sh || true
+    /bin/sh || /bin/bash || true
 done
 EOF
 RUN chmod +x /usr/local/bin/entrypoint.sh

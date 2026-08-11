@@ -63,10 +63,9 @@ def create_jwt(user_id: int, role: str) -> str:
     return jwt.encode(payload, Config.JWT_SECRET, algorithm=Config.JWT_ALGORITHM)
 
 def decode_jwt(token: str) -> dict:
-    """VULNERABILITY: Allows 'none' algorithm and ignores signature when none."""
+    """Decode JWT with strict algorithm whitelist."""
     try:
-        # Intentionally allow 'none' algorithm (Vuln #5)
-        payload = jwt.decode(token, Config.JWT_SECRET, algorithms=[Config.JWT_ALGORITHM, "none"])
+        payload = jwt.decode(token, Config.JWT_SECRET, algorithms=["HS256"])
         return payload
     except jwt.InvalidTokenError:
         return None
@@ -88,7 +87,7 @@ def decode_jwt(token: str) -> dict:
 def get_current_user(request: Request, db: Session = Depends(get_db)):
     token = request.cookies.get("access_token")
     if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        raise HTTPException(status_code=401, detail="Not authenticated please re login")
 
     payload = decode_jwt(token)
     if not payload:
@@ -131,3 +130,9 @@ def get_current_user_optional(request: Request, db: Session = Depends(get_db)):
         return None
 
     return db.query(User).filter(User.id == user_id).first()
+
+
+def require_admin(user: User = Depends(get_current_user)):
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    return user

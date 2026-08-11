@@ -1,23 +1,36 @@
 import paramiko
+import os
+import logging
 from config import Config
+
+logger = logging.getLogger(__name__)
+
+
+def _ssh_client():
+    client = paramiko.SSHClient()
+    known_hosts = os.path.expanduser("~/.ssh/known_hosts")
+    if os.path.exists(known_hosts):
+        client.load_host_keys(known_hosts)
+    client.set_missing_host_key_policy(paramiko.RejectPolicy())
+    client.connect(
+        Config.VM_HOST,
+        username=Config.VM_SSH_USER,
+        key_filename=Config.VM_SSH_KEY_PATH,
+        passphrase=Config.VM_SSH_PASSPHRASE or None,
+        timeout=5,
+    )
+    return client
 
 
 def _ssh(cmd: str) -> tuple[bool, str]:
     try:
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(
-            Config.VM_HOST,
-            username=Config.VM_SSH_USER,
-            key_filename=Config.VM_SSH_KEY_PATH,
-            passphrase=Config.VM_SSH_PASSPHRASE or None,
-            timeout=5,
-        )
-        _, stdout, _ = client.exec_command(cmd, timeout=10)
+        client = _ssh_client()
+        stdin, stdout, stderr = client.exec_command(cmd, timeout=10)
         out = stdout.read().decode("utf-8", errors="replace").strip()
         client.close()
         return True, out
     except Exception as e:
+        logger.error(f"SSH command failed: {cmd!r}: {e}")
         return False, str(e)
 
 
@@ -42,18 +55,18 @@ def get_node_resources() -> dict:
         if part.startswith("CPUs=") or part.startswith("CPUTot="):
             try:
                 total_cpu = int(part.split("=")[1].split(" ")[0])
-            except Exception:
-                pass
+            except (ValueError, IndexError) as e:
+                logger.warning(f"Could not parse CPU value from {part!r}: {e}")
         if part.startswith("CPUAlloc="):
             try:
                 alloc_cpu = int(part.split("=")[1].split(" ")[0])
-            except Exception:
-                pass
+            except (ValueError, IndexError) as e:
+                logger.warning(f"Could not parse CPUAlloc value from {part!r}: {e}")
         if part.startswith("RealMemory="):
             try:
                 total_ram_gb = int(part.split("=")[1].split(" ")[0]) / 1024
-            except Exception:
-                pass
+            except (ValueError, IndexError) as e:
+                logger.warning(f"Could not parse RealMemory value from {part!r}: {e}")
 
     free_cpu = max(0, total_cpu - alloc_cpu)
 
@@ -72,8 +85,8 @@ def get_node_resources() -> dict:
                         available_mb = int(parts[6])
                         total_ram_gb = round(total_mb / 1024, 1)
                         free_ram_gb = round(available_mb / 1024, 1)
-                    except Exception:
-                        pass
+                    except (ValueError, IndexError) as e:
+                        logger.warning(f"Could not parse memory info: {e}")
                 break
 
     result = {

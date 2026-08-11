@@ -49,3 +49,13 @@ class ResourceAllocation(Base):
     status = Column(String(20), nullable=False, default="allocated")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     released_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class EditorRun(Base):
+    __tablename__ = "editor_runs"
+    id = Column(Integer, primary_key=True, index=True)
+    reservation_id = Column(Integer, ForeignKey("reservations.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    code_input = Column(Text, nullable=False)
+    output = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

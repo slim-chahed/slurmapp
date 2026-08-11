@@ -1,10 +1,13 @@
 import socket
 import paramiko
+import os
+import logging
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 
 from config import Config
 
+logger = logging.getLogger(__name__)
 
 _health_cache: Dict = {}
 _cache_expires_at: Optional[datetime] = None
@@ -19,7 +22,10 @@ def _is_cache_valid() -> bool:
 
 def _ssh_client() -> paramiko.SSHClient:
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    known_hosts = os.path.expanduser("~/.ssh/known_hosts")
+    if os.path.exists(known_hosts):
+        client.load_host_keys(known_hosts)
+    client.set_missing_host_key_policy(paramiko.RejectPolicy())
     client.connect(
         hostname=Config.VM_HOST,
         port=Config.VM_SSH_PORT,
@@ -40,6 +46,7 @@ def _run_ssh(command: str) -> tuple[bool, str]:
         client.close()
         return True, out.strip()
     except Exception as e:
+        logger.error(f"SSH command failed: {command!r}: {e}")
         return False, str(e)
 
 
@@ -109,7 +116,8 @@ def run_health_check() -> Dict:
     try:
         client = _ssh_client()
         client.close()
-    except Exception:
+    except Exception as e:
+        logger.error(f"SSH health check failed: {e}")
         ssh_ok = False
 
     if not ssh_ok:
