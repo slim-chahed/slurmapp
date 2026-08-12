@@ -65,7 +65,7 @@
 
     {% if running %}
     <h4 class="mt-4">Running Tasks ({{ running|length }})</h4>
-    <table class="table table-bordered table-esprit">
+    <table class="table table-bordered table-esprit" aria-label="Running tasks">
       <thead>
         <tr>
           <th>ID</th>
@@ -99,7 +99,7 @@
 
     {% if queued %}
     <h4 class="mt-4">Queued Tasks ({{ queued|length }})</h4>
-    <table class="table table-bordered table-esprit">
+    <table class="table table-bordered table-esprit" aria-label="Queued tasks">
       <thead>
         <tr>
           <th>ID</th>
@@ -131,7 +131,7 @@
 
     <h2 class="mb-3 mt-5">Pending Reservations</h2>
     {% if pending %}
-    <table class="table table-bordered table-esprit">
+    <table class="table table-bordered table-esprit" aria-label="Pending reservations">
       <thead>
         <tr>
           <th>ID</th>

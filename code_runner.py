@@ -34,7 +34,7 @@ def _patch_java_class_name(code: str, class_name: str) -> str:
     return patched
 
 
-def build_script(language: str, code: str, cpu: int, ram: int, duration_hours: int, job_id: str) -> str:
+def build_script(language: str, cpu: int, ram: int, duration_hours: int, job_id: str) -> str:
     runner = LANGUAGE_RUNNERS[language].format(job_id=job_id)
     script = f"""#!/bin/bash
 #SBATCH --job-name={language}_job
@@ -58,7 +58,7 @@ def run_code(language: str, code: str, cpu: int, ram: int, duration_hours: int) 
     if not ok:
         print(f"[RUN_CODE] write_code FAILED for job_id={job_id}")
         return {"success": False, "error": "Failed to write code to VM /shared"}
-    script = build_script(language, code, cpu, ram, duration_hours, job_id)
+    script = build_script(language, cpu, ram, duration_hours, job_id)
     print(f"[RUN_CODE] submitting script for job_id={job_id}")
     result = submit_slurm_job(script)
     print(f"[RUN_CODE] submit result={result} for job_id={job_id}")

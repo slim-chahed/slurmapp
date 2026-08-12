@@ -1,11 +1,14 @@
 import os
 import tempfile
+import logging
 from dotenv import load_dotenv
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 class Config:
-    # Database
+    # Database - defaults for lab environment, override via env vars in production
     DB_HOST = os.getenv("DB_HOST", "192.168.74.171")
     DB_PORT = int(os.getenv("DB_PORT", 3306))
     DB_USER = os.getenv("DB_USER", "appuser")
@@ -13,12 +16,12 @@ class Config:
     DB_NAME = os.getenv("DB_NAME", "reservations")
     DATABASE_URL = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
-    # Redis
+    # Redis - defaults for lab environment, override via env vars in production
     REDIS_HOST = os.getenv("REDIS_HOST", "192.168.74.171")
     REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
     REDIS_DB = int(os.getenv("REDIS_DB", 0))
 
-    # LDAP
+    # LDAP - defaults for lab environment, override via env vars in production
     LDAP_HOST = os.getenv("LDAP_HOST", "192.168.74.171")
     LDAP_PORT = int(os.getenv("LDAP_PORT", 389))
     LDAP_BASE_DN = os.getenv("LDAP_BASE_DN", "dc=mylab,dc=local")
@@ -27,15 +30,31 @@ class Config:
     LDAP_USER_FILTER = os.getenv("LDAP_USER_FILTER", "(uid={username})")
 
     # JWT
-    JWT_SECRET = os.getenv("JWT_SECRET", "supersecretkey")
+    JWT_SECRET = os.getenv("JWT_SECRET")
+    if not JWT_SECRET:
+        _jwt_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".jwt_secret")
+        if os.path.exists(_jwt_path):
+            try:
+                with open(_jwt_path, "r") as f:
+                    JWT_SECRET = f.read().strip()
+            except Exception:
+                JWT_SECRET = None
+        if not JWT_SECRET:
+            import secrets
+            JWT_SECRET = secrets.token_hex(32)
+            try:
+                with open(_jwt_path, "w") as f:
+                    f.write(JWT_SECRET)
+            except Exception as e:
+                logger.warning(f"Could not write JWT secret file: {e}")
     JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 
-    # Slurm
+    # Slurm - defaults for lab environment, override via env vars in production
     SLURM_REST_URL = os.getenv("SLURM_REST_URL", "http://192.168.74.171:6820")
     SLURM_SERVICE_USER = os.getenv("SLURM_SERVICE_USER", "webapp")
     SLURM_JWT_TOKEN = os.getenv("SLURM_JWT_TOKEN", "")
 
-    # VM / SSH monitoring
+    # VM / SSH monitoring - defaults for lab environment, override via env vars in production
     VM_HOST = os.getenv("VM_HOST", "192.168.74.171")
     VM_SSH_PORT = int(os.getenv("VM_SSH_PORT", 22))
     VM_SSH_USER = os.getenv("VM_SSH_USER", "ubuntu")

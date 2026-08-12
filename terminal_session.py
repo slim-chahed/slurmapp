@@ -79,25 +79,53 @@ docker logs "$CONTAINER_NAME" 2>&1 | tail -10 >> /tmp/terminal_{self.reservation
 exit 0
 """
 
+    def _get_expected_container_id(self) -> str | None:
+        ok, out = _run_ssh(f"sed -n '3p' /tmp/terminal_{self.reservation_id}.log 2>/dev/null || true")
+        if not ok or not out:
+            return None
+        candidate = out.strip()
+        if len(candidate) == 64 and all(c in "0123456789abcdef" for c in candidate):
+            return candidate
+        return None
+
+    def _is_container_present(self, container_id: str) -> bool:
+        short_id = container_id[:12]
+        ok, out = _run_ssh(f"docker ps --filter id={container_id} --format '{{{{.ID}}}}' 2>/dev/null || true")
+        if ok and short_id in out:
+            return True
+        ok2, out2 = _run_ssh(f"docker ps -a --filter id={container_id} --format '{{{{.ID}}}}' 2>/dev/null || true")
+        return ok2 and short_id in out2
+
     def _wait_for_container(self) -> None:
-        expected_id = None
+        expected_id = self._get_expected_container_id()
+        while not expected_id or not self._is_container_present(expected_id):
+            time.sleep(2)
+            expected_id = self._get_expected_container_id()
+
+    def _get_job_state_from_squeue(self) -> str | None:
+        ok, out = _run_ssh(f"squeue -j {self.job_id} --noheader --format='%s' 2>/dev/null || true")
+        if ok and out.strip():
+            return out.strip().split()[0].lower()
+        return None
+
+    def _get_job_state_from_sacct(self) -> str | None:
+        ok, out = _run_ssh(f"sacct -j {self.job_id} --noheader --format=State 2>/dev/null || true")
+        if ok and out.strip():
+            return out.strip().split()[0].lower()
+        return None
+
+    def _is_terminal_job_state(self, state: str) -> bool:
+        if state in ("failed", "cancelled", "timeout", "node_fail", "preempted"):
+            return True
+        return state in ("running", "completed")
+
+    def _wait_for_slurm_job(self) -> None:
         while True:
-            if expected_id is None:
-                ok, out = _run_ssh(f"sed -n '3p' /tmp/terminal_{self.reservation_id}.log 2>/dev/null || true")
-                if ok and out.strip():
-                    candidate = out.strip()
-                    if len(candidate) == 64 and all(c in "0123456789abcdef" for c in candidate):
-                        expected_id = candidate
-
-            if expected_id:
-                short_id = expected_id[:12]
-                ok, out = _run_ssh(f"docker ps --filter id={expected_id} --format '{{{{.ID}}}}' 2>/dev/null || true")
-                if ok and short_id in out:
-                    return
-                ok2, out2 = _run_ssh(f"docker ps -a --filter id={expected_id} --format '{{{{.ID}}}}' 2>/dev/null || true")
-                if ok2 and short_id in out2:
-                    return
-
+            state = self._get_job_state_from_squeue()
+            if state is None:
+                state = self._get_job_state_from_sacct()
+            if state and self._is_terminal_job_state(state):
+                return
             time.sleep(2)
 
     def start_slurm_allocation(self) -> dict:
@@ -126,25 +154,6 @@ exit 0
             time.sleep(1)
         except Exception as e:
             logger.warning(f"Could not cleanup existing container {self.container_name}: {e}")
-
-    def _wait_for_slurm_job(self) -> None:
-        while True:
-            ok, out = _run_ssh(f"squeue -j {self.job_id} --noheader --format='%s' 2>/dev/null || true")
-            if ok and out.strip():
-                state = out.strip().split()[0].lower()
-                if state in ("failed", "cancelled", "timeout", "node_fail", "preempted"):
-                    return
-                if state in ("running", "completed"):
-                    return
-            else:
-                ok2, out2 = _run_ssh(f"sacct -j {self.job_id} --noheader --format=State 2>/dev/null || true")
-                if ok2 and out2.strip():
-                    state = out2.strip().split()[0].lower()
-                    if state in ("failed", "cancelled", "timeout", "node_fail"):
-                        return
-                    if state in ("running", "completed"):
-                        return
-            time.sleep(2)
 
     def connect_to_existing(self) -> dict:
         try:

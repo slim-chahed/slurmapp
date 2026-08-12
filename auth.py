@@ -62,7 +62,7 @@ def create_jwt(user_id: int, role: str) -> str:
     }
     return jwt.encode(payload, Config.JWT_SECRET, algorithm=Config.JWT_ALGORITHM)
 
-def decode_jwt(token: str) -> dict:
+def decode_jwt(token: str) -> dict | None:
     """Decode JWT with strict algorithm whitelist."""
     try:
         payload = jwt.decode(token, Config.JWT_SECRET, algorithms=["HS256"])
@@ -70,20 +70,7 @@ def decode_jwt(token: str) -> dict:
     except jwt.InvalidTokenError:
         return None
 
-# def get_current_user(request: Request, db: Session = Depends(SessionLocal)):
-#     token = request.cookies.get("access_token")
-#     if not token:
-#         raise HTTPException(status_code=401, detail="Not authenticated")
-#     payload = decode_jwt(token)
-#     if not payload:
-#         raise HTTPException(status_code=401, detail="Invalid token")
-#     user_id = payload.get("user_id")
-#     if not user_id:
-#         raise HTTPException(status_code=401, detail="Invalid token payload")
-#     user = db.query(User).filter(User.id == user_id).first()
-#     if not user:
-#         raise HTTPException(status_code=401, detail="User not found")
-#     return user
+
 def get_current_user(request: Request, db: Session = Depends(get_db)):
     token = request.cookies.get("access_token")
     if not token:
@@ -102,19 +89,6 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="User not found")
 
     return user
-
-# Helper to get current user without raising (for optional checks)
-# def get_current_user_optional(request: Request, db: Session = Depends(SessionLocal)):
-#     token = request.cookies.get("access_token")
-#     if not token:
-#         return None
-#     payload = decode_jwt(token)
-#     if not payload:
-#         return None
-#     user_id = payload.get("user_id")
-#     if not user_id:
-#         return None
-#     return db.query(User).filter(User.id == user_id).first()
 
 def get_current_user_optional(request: Request, db: Session = Depends(get_db)):
     token = request.cookies.get("access_token")

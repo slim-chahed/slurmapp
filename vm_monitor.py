@@ -14,6 +14,7 @@ _cache_expires_at: Optional[datetime] = None
 CACHE_TTL = timedelta(seconds=Config.VM_HEALTH_CACHE_SECONDS)
 
 _first_failure: Optional[datetime] = None
+_SSH_FAILED = "SSH failed"
 
 
 def _is_cache_valid() -> bool:
@@ -40,9 +41,9 @@ def _ssh_client() -> paramiko.SSHClient:
 def _run_ssh(command: str) -> tuple[bool, str]:
     try:
         client = _ssh_client()
-        stdin, stdout, stderr = client.exec_command(command, timeout=10)
+        stdin, stdout, stderr = client.exec_command(command, timeout=10)  # nosec B601 - command is internal/hardcoded
         out = stdout.read().decode("utf-8", errors="replace")
-        err = stderr.read().decode("utf-8", errors="replace")
+        stderr.read().decode("utf-8", errors="replace")
         client.close()
         return True, out.strip()
     except Exception as e:
@@ -104,6 +105,36 @@ def _check_tcp(name: str, host: str, port: int) -> Dict:
     }
 
 
+def _build_ssh_failed_services() -> list[Dict]:
+    return [
+        {"name": "vm_ssh", "type": "ssh", "up": False, "raw": "SSH connection failed"},
+        {"name": "slurmrestd", "type": "systemd", "up": False, "raw": _SSH_FAILED},
+        {"name": "slurmctld", "type": "systemd", "up": False, "raw": _SSH_FAILED},
+        {"name": "slurmd", "type": "systemd", "up": False, "raw": _SSH_FAILED},
+        {"name": "munge", "type": "systemd", "up": False, "raw": _SSH_FAILED},
+        {"name": "app-mysql", "type": "docker", "up": False, "raw": _SSH_FAILED},
+        {"name": "ldap-server", "type": "docker", "up": False, "raw": _SSH_FAILED},
+        _check_tcp("ldap", Config.LDAP_HOST, Config.LDAP_PORT),
+        _check_tcp("mysql", Config.DB_HOST, Config.DB_PORT),
+        _check_tcp("slurm_rest", Config.VM_HOST, 6820),
+    ]
+
+
+def _build_successful_services() -> list[Dict]:
+    services = [
+        _check_service_active("slurmrestd.service"),
+        _check_service_active("slurmctld.service"),
+        _check_service_active("slurmd.service"),
+        _check_service_active("munge.service"),
+    ]
+    services.append(_check_container("app-mysql"))
+    services.append(_check_container("ldap-server"))
+    services.append(_check_tcp("ldap", Config.LDAP_HOST, Config.LDAP_PORT))
+    services.append(_check_tcp("mysql", Config.DB_HOST, Config.DB_PORT))
+    services.append(_check_tcp("slurm_rest", Config.VM_HOST, 6820))
+    return services
+
+
 def run_health_check() -> Dict:
     global _cache_expires_at, _first_failure, _health_cache
 
@@ -121,34 +152,13 @@ def run_health_check() -> Dict:
         ssh_ok = False
 
     if not ssh_ok:
-        services = [
-            {"name": "vm_ssh", "type": "ssh", "up": False, "raw": "SSH connection failed"},
-            {"name": "slurmrestd", "type": "systemd", "up": False, "raw": "SSH failed"},
-            {"name": "slurmctld", "type": "systemd", "up": False, "raw": "SSH failed"},
-            {"name": "slurmd", "type": "systemd", "up": False, "raw": "SSH failed"},
-            {"name": "munge", "type": "systemd", "up": False, "raw": "SSH failed"},
-            {"name": "app-mysql", "type": "docker", "up": False, "raw": "SSH failed"},
-            {"name": "ldap-server", "type": "docker", "up": False, "raw": "SSH failed"},
-            _check_tcp("ldap", Config.LDAP_HOST, Config.LDAP_PORT),
-            _check_tcp("mysql", Config.DB_HOST, Config.DB_PORT),
-            _check_tcp("slurm_rest", Config.VM_HOST, 6820),
-        ]
+        services = _build_ssh_failed_services()
         _first_failure = _first_failure or datetime.utcnow()
         _health_cache = {"services": services, "overall_up": False}
         _cache_expires_at = datetime.utcnow() + CACHE_TTL
         return _health_cache
 
-    services.extend([
-        _check_service_active("slurmrestd.service"),
-        _check_service_active("slurmctld.service"),
-        _check_service_active("slurmd.service"),
-        _check_service_active("munge.service"),
-    ])
-    services.append(_check_container("app-mysql"))
-    services.append(_check_container("ldap-server"))
-    services.append(_check_tcp("ldap", Config.LDAP_HOST, Config.LDAP_PORT))
-    services.append(_check_tcp("mysql", Config.DB_HOST, Config.DB_PORT))
-    services.append(_check_tcp("slurm_rest", Config.VM_HOST, 6820))
+    services = _build_successful_services()
 
     overall_up = all(s["up"] for s in services)
 

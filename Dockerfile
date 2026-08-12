@@ -13,6 +13,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy entire application context - required for Jinja2 templates, static files, and module imports
 COPY . .
 
 RUN chown -R appuser:appuser /app
