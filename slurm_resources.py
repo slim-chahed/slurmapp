@@ -97,7 +97,6 @@ def _build_resource_result(total_cpu: int, free_cpu: int, total_ram_gb: float, f
 
 def get_node_resources() -> dict:
     ok, out = _ssh("scontrol show nodes 2>/dev/null || sinfo -N -l 2>/dev/null")
-    print(f"[slurm_resources] ssh_ok={ok} raw={out!r}")
     if not ok:
         return _build_resource_result(
             total_cpu=Config.MAX_CPU,
@@ -133,5 +132,4 @@ def get_node_resources() -> dict:
             free_ram_gb = parsed_free_ram
 
     result = _build_resource_result(total_cpu, free_cpu, total_ram_gb, free_ram_gb, out)
-    print(f"[slurm_resources] result={result}")
     return result

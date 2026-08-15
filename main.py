@@ -2,6 +2,9 @@ import logging
 import os
 import hmac
 import hashlib
+import time
+import re
+from collections import defaultdict
 from fastapi import FastAPI, Depends, HTTPException, Request, Form, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
@@ -15,6 +18,20 @@ import asyncio
 import secrets
 
 logger = logging.getLogger(__name__)
+
+_login_attempts = defaultdict(list)
+
+def _check_rate_limit(ip: str, max_attempts: int = 5, window_seconds: int = 60) -> bool:
+    now = time.time()
+    attempts = _login_attempts[ip]
+    _login_attempts[ip] = [t for t in attempts if now - t < window_seconds]
+    if len(_login_attempts[ip]) >= max_attempts:
+        return False
+    _login_attempts[ip].append(now)
+    return True
+
+ALLOWED_LANGUAGES = {"python", "java", "c"}
+ALLOWED_MODES = {"batch", "editor", "terminal"}
 
 _CSRF_SECRET_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".csrf_secret")
 
@@ -77,6 +94,8 @@ def validate_csrf_token(token: str) -> bool:
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        nonce = secrets.token_urlsafe(16)
+        request.state.csp_nonce = nonce
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
@@ -86,15 +105,21 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
         response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
         response.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
-            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-            "font-src 'self' https://cdn.jsdelivr.net; "
-            "img-src 'self' data:; "
-            "connect-src 'self' ws: wss:;"
-        )
+        response.headers["X-Permitted-Cross-Domain-Policies"] = "none"
+        response.headers["X-Download-Options"] = "noopen"
+        if request.method == "GET":
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["Content-Security-Policy"] = (
+            f"default-src 'self'; "
+            f"script-src 'self' 'nonce-{nonce}' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
+            f"style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            f"font-src 'self' https://cdn.jsdelivr.net; "
+            f"img-src 'self' data:; "
+            f"connect-src 'self' ws: wss:; "
+            f"frame-ancestors 'none'; "
+            f"form-action 'self';"
+        )
         return response
 
 
@@ -109,11 +134,12 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             request.state.csrf_token = token
         response = await call_next(request)
         if request.method in ("GET", "HEAD", "OPTIONS"):
+            is_https = request.url.scheme == "https"
             response.set_cookie(
                 key="csrf_token",
                 value=request.state.csrf_token,
                 httponly=False,
-                secure=False,
+                secure=is_https,
                 samesite="Strict",
                 path="/",
             )
@@ -366,7 +392,14 @@ def _render_csrf_token(request: Request = None) -> str:
     return generate_csrf_token()
 
 
+def _render_csp_nonce(request: Request = None) -> str:
+    if request is not None and hasattr(request, "state") and hasattr(request.state, "csp_nonce"):
+        return request.state.csp_nonce
+    return ""
+
+
 templates.env.globals["csrf_token"] = _render_csrf_token
+templates.env.globals["csp_nonce"] = _render_csp_nonce
 
 
 @app.on_event("startup")
@@ -380,7 +413,15 @@ def startup():
         logger.error(f"Failed to release orphaned resources on startup: {e}", exc_info=True)
     finally:
         db.close()
-    print("[STARTUP] Server started with DinD terminal support")
+
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
 
 
 PUBLIC_PATHS = {"/", "/login", "/system-down"}
@@ -457,18 +498,22 @@ async def login_page(request: Request):
 
 @app.post("/login", response_class=HTMLResponse)
 async def login(request: Request, username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db), csrf: None = Depends(csrf_protect)):
+    client_ip = request.client.host if request.client else "unknown"
+    if not _check_rate_limit(client_ip):
+        return templates.TemplateResponse(request, "login.html", {"request": request, "error": "Too many login attempts. Please try again later."})
     if authenticate_ldap(username, password):
         rotate_csrf_secret()
         user = get_or_create_user(db, username)
         token = create_jwt(user.id, user.role)
         health = get_health()
         target = PATH_SYSTEM_DOWN if not health["overall_up"] else PATH_DASHBOARD
-        response = RedirectResponse(url=target, status_code=302)
+        response = RedirectResponse(url=target, status_code=303)
+        is_https = request.url.scheme == "https"
         response.set_cookie(
             key="access_token",
             value=token,
             httponly=True,
-            secure=True,
+            secure=is_https,
             samesite="Strict",
             max_age=3600,
             path="/",
@@ -496,11 +541,15 @@ async def dashboard(request: Request, search: str = Query(None), db: Session = D
 @app.get("/request", response_class=HTMLResponse)
 async def request_form(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     _release_all_orphaned_resources(db)
-    resources = _get_or_create_cluster_resources(db)
+    try:
+        resources = _get_or_create_cluster_resources(db)
+    except Exception:
+        resources = None
+    safe_resources = resources or type("FallbackResources", (), {"free_cpu": Config.MAX_CPU, "free_ram_gb": Config.MAX_RAM_GB})()
     return templates.TemplateResponse(request, "request_form.html", {
         "request": request,
         "user": user,
-        "resources": resources,
+        "resources": safe_resources,
         "limits": {"cpu": Config.MAX_CPU, "ram": Config.MAX_RAM_GB, "hours": Config.MAX_WALLTIME_HOURS},
     })
 
@@ -520,43 +569,56 @@ async def create_reservation(
     csrf: None = Depends(csrf_protect),
 ):
     from code_runner import build_script
-    from sanitize import validate_job_name, validate_code_input
+    from sanitize import validate_job_name, validate_code_input, validate_language, validate_mode
     import uuid
 
     try:
         job_name = validate_job_name(job_name)
         code = validate_code_input(code)
-    except ValueError as e:
-        return templates.TemplateResponse(request, "request_form.html", {
-            "request": request,
-            "user": user,
-            "resources": _get_or_create_cluster_resources(db),
-            "limits": {"cpu": Config.MAX_CPU, "ram": Config.MAX_RAM_GB, "hours": Config.MAX_WALLTIME_HOURS},
-            "error": str(e),
-        })
+        language = validate_language(language)
+        mode = validate_mode(mode)
+        cpu = int(cpu)
+        ram = int(ram)
+        duration = int(duration)
+        enforce_resources(cpu, ram, duration)
+        job_id = uuid.uuid4().hex[:8]
+        script = build_script(language, cpu, ram, duration, job_id) if mode == "batch" else code
+        if mode == "terminal":
+            language = "docker"
+        reservation = Reservation(
+            user_id=user.id,
+            job_name=job_name,
+            cpu=cpu,
+            ram=ram,
+            duration=duration,
+            script=script,
+            status="pending",
+            language=language,
+            mode=mode,
+            code=code,
+        )
+        db.add(reservation)
+        db.commit()
+        db.refresh(reservation)
 
-    enforce_resources(cpu, ram, duration)
-    job_id = uuid.uuid4().hex[:8]
-    script = build_script(language, cpu, ram, duration, job_id) if mode == "batch" else code
-    if mode == "terminal":
-        language = "docker"
-    reservation = Reservation(
-        user_id=user.id,
-        job_name=job_name,
-        cpu=cpu,
-        ram=ram,
-        duration=duration,
-        script=script,
-        status="pending",
-        language=language,
-        mode=mode,
-        code=code,
-    )
-    db.add(reservation)
-    db.commit()
-    db.refresh(reservation)
-
-    return RedirectResponse(url=PATH_DASHBOARD, status_code=302)
+        return RedirectResponse(url=PATH_DASHBOARD, status_code=302)
+    except Exception as e:
+        logger.error(f"Request failed: {e}", exc_info=True)
+        try:
+            resources = _get_or_create_cluster_resources(db)
+        except Exception:
+            resources = None
+        safe_resources = resources or type("FallbackResources", (), {"free_cpu": Config.MAX_CPU, "free_ram_gb": Config.MAX_RAM_GB})()
+        try:
+            return templates.TemplateResponse(request, "request_form.html", {
+                "request": request,
+                "user": user,
+                "resources": safe_resources,
+                "limits": {"cpu": Config.MAX_CPU, "ram": Config.MAX_RAM_GB, "hours": Config.MAX_WALLTIME_HOURS},
+                "error": "Invalid request",
+            }, status_code=400)
+        except Exception:
+            return JSONResponse(status_code=400, content={"detail": "Invalid request"})
 
 
 @app.get("/logout")
@@ -632,14 +694,23 @@ async def editor_page(request: Request, reservation_id: int, db: Session = Depen
     _cleanup_orphaned_editor_containers(db)
     reservation = db.query(Reservation).filter(Reservation.id == reservation_id).first()
     _require_editor_access(reservation, user)
-    _ensure_editor_session_active(reservation, reservation_id, db)
     now = datetime.utcnow()
+    session = _get_editor_session(reservation_id)
+    started = bool(session and session.active)
+    expired = reservation.session_expires_at and now > reservation.session_expires_at
+    if not started and not expired:
+        try:
+            _ensure_editor_session_active(reservation, reservation_id, db)
+            started = True
+        except HTTPException:
+            started = False
     remaining = max(0, int((reservation.session_expires_at - now).total_seconds())) if reservation.session_expires_at else 0
     return templates.TemplateResponse(request, "editor.html", {
         "request": request,
         "user": user,
         "reservation": reservation,
         "remaining_seconds": remaining,
+        "started": started,
     })
 
 
@@ -734,24 +805,16 @@ async def editor_stop(reservation_id: int, db: Session = Depends(get_db), user: 
 
     _cleanup_editor_session(reservation_id, db)
     reservation.status = "completed"
-    reservation.session_expires_at = datetime.utcnow()
+    reservation.session_expires_at = datetime.utcnow() - timedelta(minutes=1)
     db.commit()
     db.refresh(reservation)
     return RedirectResponse(url=PATH_DASHBOARD, status_code=302)
 
 
-@app.get("/editor/{reservation_id}/stop")
-async def editor_stop_get(reservation_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    return await editor_stop(reservation_id, db, user)
-
-
 @app.get("/editor/{reservation_id}/runs", response_class=HTMLResponse)
 async def editor_runs_page(request: Request, reservation_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    print(f"[RUNS DEBUG] Hit route for reservation_id={reservation_id} user={user.id} role={user.role}")
     reservation = db.query(Reservation).filter(Reservation.id == reservation_id).first()
-    print(f"[RUNS DEBUG] reservation found={reservation is not None} mode={reservation.mode if reservation else None} status={reservation.status if reservation else None}")
     if not reservation or (reservation.user_id != user.id and user.role != "admin"):
-        print(f"[RUNS DEBUG] Raising 404: reservation={reservation is not None} owner={reservation.user_id if reservation else None} user={user.id} role={user.role}")
         raise HTTPException(404)
     if reservation.mode != "editor":
         raise HTTPException(400, MSG_NOT_AN_EDITOR_SESSION)
@@ -807,6 +870,11 @@ def _poll_job_status(reservation: Reservation, db: Session) -> dict:
 
 
 def _get_slurm_job_status(slurm_job_id: str) -> str:
+    from sanitize import validate_job_id
+    try:
+        slurm_job_id = validate_job_id(slurm_job_id)
+    except ValueError:
+        return "unknown"
     from vm_monitor import _run_ssh
     ok, out = _run_ssh(f"sacct -j {slurm_job_id} --format=JobID,State 2>/dev/null | tail -n +3 | head -n 1 | awk '{{print $2}}'")
     if ok and out:
@@ -853,7 +921,7 @@ def _mark_reservation_completed(reservation_id: int, db: Session = None):
         res = db.query(Reservation).filter(Reservation.id == reservation_id).first() if db else None
         if res and res.status == "running":
             res.status = "completed"
-            res.session_expires_at = datetime.utcnow()
+            res.session_expires_at = datetime.utcnow() - timedelta(minutes=1)
             try:
                 res.terminal_pid = None
             except Exception as e:
@@ -866,16 +934,13 @@ def _mark_reservation_completed(reservation_id: int, db: Session = None):
 
 
 def _cleanup_terminal_session(reservation_id: int, db: Session = None):
-    print(f"[TRACE] _cleanup_terminal_session reservation_id={reservation_id}")
     session = _active_terminal_sessions.pop(reservation_id, None)
     if session:
-        print(f"[TRACE] cleanup session found for {reservation_id}")
         try:
             session.cleanup()
         except Exception as e:
             logger.error(f"Failed to cleanup session for reservation {reservation_id}: {e}", exc_info=True)
     else:
-        print(f"[TRACE] no active session for {reservation_id}, cleaning container directly")
         _cancel_slurm_job_if_exists(reservation_id)
         _remove_terminal_container(reservation_id)
     _mark_reservation_completed(reservation_id, db)
@@ -924,7 +989,7 @@ def _cleanup_editor_session(reservation_id: int, db: Session = None):
         res = db.query(Reservation).filter(Reservation.id == reservation_id).first() if db else None
         if res and res.status == "running":
             res.status = "completed"
-            res.session_expires_at = datetime.utcnow()
+            res.session_expires_at = datetime.utcnow() - timedelta(minutes=1)
             db.commit()
             db.refresh(res)
     except Exception as e:
@@ -1010,7 +1075,6 @@ async def terminal_page(request: Request, reservation_id: int, db: Session = Dep
     started = now < reservation.session_expires_at if reservation.session_expires_at else True
     remaining = max(0, int((reservation.session_expires_at - now).total_seconds())) if reservation.session_expires_at else 0
     active = _terminal_is_active(reservation)
-    print(f"[TRACE] terminal_page reservation_id={reservation_id} session_expires_at={reservation.session_expires_at} now={now} remaining={remaining} active={active}")
     return templates.TemplateResponse(request, "terminal.html", {
         "request": request,
         "user": user,
@@ -1046,7 +1110,6 @@ async def terminal_start(reservation_id: int, db: Session = Depends(get_db), use
         terminal_type=reservation.language,
     )
     result = session.start_slurm_allocation()
-    print(f"[TRACE] terminal_start reservation_id={reservation_id} result={result}")
     if not result.get("success"):
         reservation.output = f"TERMINAL_START_ERROR: {result.get('error', 'Unknown error')}"
         if session.job_id:
@@ -1076,7 +1139,7 @@ def _finalize_terminal_stop(reservation_id: int, db: Session):
     _cleanup_terminal_session(reservation_id, db)
     reservation = db.query(Reservation).filter(Reservation.id == reservation_id).first()
     reservation.status = "completed"
-    reservation.session_expires_at = datetime.utcnow()
+    reservation.session_expires_at = datetime.utcnow() - timedelta(minutes=1)
     try:
         reservation.terminal_pid = None
     except Exception as e:
@@ -1091,12 +1154,6 @@ async def terminal_stop(reservation_id: int, db: Session = Depends(get_db), user
     _validate_terminal_stop(reservation, user)
     _finalize_terminal_stop(reservation_id, db)
     return RedirectResponse(url=PATH_DASHBOARD, status_code=302)
-
-
-@app.get("/terminal/{reservation_id}/stop")
-async def terminal_stop_get(reservation_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    print(f"[TRACE] terminal_stop GET reservation_id={reservation_id}")
-    return await terminal_stop(reservation_id, db, user)
 
 
 def _authenticate_websocket_user(websocket: WebSocket) -> User | None:
@@ -1150,6 +1207,7 @@ async def _read_terminal_channel(websocket: WebSocket, session: TerminalSession,
         try:
             data = session.read_output()
             if data:
+                logger.info(f"[TERMINAL_WS] reservation_id={reservation_id} sending_output len={len(data)}")
                 await websocket.send_json({"output": data})
         except Exception as e:
             logger.error(f"Error reading from terminal channel for reservation {reservation_id}: {e}")
@@ -1196,20 +1254,19 @@ async def terminal_ws(websocket: WebSocket, reservation_id: int):
 
     await websocket.accept()
     session = _get_terminal_session(reservation_id)
+    logger.info(f"[TERMINAL_WS] reservation_id={reservation_id} existing_session={session is not None} active={session.active if session else 'N/A'}")
 
     if not session or not session.active:
         db_local = SessionLocal()
         try:
             reservation = db_local.query(Reservation).filter(Reservation.id == reservation_id).first()
             session = _connect_terminal_session(reservation_id, reservation)
+            logger.info(f"[TERMINAL_WS] reservation_id={reservation_id} _connect_terminal_session returned session={session is not None} active={session.active if session else 'N/A'}")
             if not session:
-                status = reservation.status if reservation else "None"
-                print(f"[TRACE] ws_no_active_session reservation_id={reservation_id} status={status}")
                 await websocket.send_json({"error": "No active terminal session"})
                 await websocket.close()
                 return
         except Exception as e:
-            print(f"[TRACE] ws_exception reservation_id={reservation_id} error={e}")
             logger.error(f"WebSocket exception for reservation {reservation_id}: {e}", exc_info=True)
             await websocket.close()
             return
@@ -1218,14 +1275,15 @@ async def terminal_ws(websocket: WebSocket, reservation_id: int):
 
     try:
         await websocket.send_json({"status": "connected"})
+        buffered = session.get_output() if hasattr(session, "get_output") else ""
+        if buffered:
+            await websocket.send_json({"output": buffered})
     except Exception:
         await websocket.close()
         return
 
     await _run_terminal_io(websocket, session, reservation_id)
 
-    if session and session.active:
-        _cleanup_terminal_session(reservation_id)
     try:
         await websocket.send_json({"status": "closed", "reason": "Session ended"})
     except Exception as e:
@@ -1472,3 +1530,22 @@ async def reject_reservation(
     reservation.status = "rejected"
     db.commit()
     return RedirectResponse(url=PATH_ADMIN, status_code=302)
+
+
+@app.post("/admin/cleanup-test-data")
+async def cleanup_test_data(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+    csrf: None = Depends(csrf_protect),
+):
+    zap_keywords = ("test", "zap", "request", "tere", "thishouldnotexistandhopefullyitwillnot")
+    reservations = db.query(Reservation).filter(Reservation.job_name.in_(zap_keywords)).all()
+    reservation_ids = [r.id for r in reservations]
+    if reservation_ids:
+        db.query(EditorRun).filter(EditorRun.reservation_id.in_(reservation_ids)).delete(synchronize_session=False)
+        db.query(ResourceAllocation).filter(ResourceAllocation.reservation_id.in_(reservation_ids)).delete(synchronize_session=False)
+        for reservation in reservations:
+            db.delete(reservation)
+        db.commit()
+    return RedirectResponse(url=PATH_ADMIN + "?cleaned=" + str(len(reservation_ids)), status_code=302)

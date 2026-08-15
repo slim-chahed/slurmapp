@@ -1,6 +1,8 @@
 import re
 from html import escape as html_escape
 
+ALLOWED_JOB_ID = re.compile(r"^[A-Za-z0-9_-]+$")
+
 
 def sanitize_text(value: str, max_length: int = 255, allow_html: bool = False) -> str:
     value = str(value or "")
@@ -11,23 +13,22 @@ def sanitize_text(value: str, max_length: int = 255, allow_html: bool = False) -
 
 
 def validate_job_name(name: str) -> str:
+    name = str(name or "")
+    if "%" in name:
+        raise ValueError("Invalid job name")
     name = sanitize_text(name, max_length=100)
-
     suspicious_patterns = [
         "../", "..\\", "/etc/passwd", "WEB-INF", "/request", "system.ini",
         "SELECT ", "INSERT ", "UPDATE ", "DELETE ", "UNION ALL", "AND 1=1", "OR 1=1",
         "<script", "alert(", "onerror=", "onmouseover=", "prompt()",
         "ShellShock", "owasp.org", "sleep(", "exec ", "cmd=", "dir ", "ls /",
     ]
-
     lowered = name.lower()
     for pattern in suspicious_patterns:
         if pattern.lower() in lowered:
             raise ValueError("Invalid job name")
-
     if not re.fullmatch(r"[A-Za-z0-9 _\-]{1,100}", name):
         raise ValueError("Invalid job name")
-
     return name
 
 
@@ -40,4 +41,25 @@ def validate_code_input(code: str, max_length: int = 50000) -> str:
 
 def sanitize_code_output(output: str) -> str:
     output = str(output or "")
+    output = re.sub(r"\b(?:10|172\.(?:1[6-9]|2[0-9]|3[01])|192\.168)\.\d{1,3}\.\d{1,3}\b", "[REDACTED]", output)
     return output[:100000]
+
+
+def validate_job_id(job_id: str) -> str:
+    if not job_id or not ALLOWED_JOB_ID.match(job_id):
+        raise ValueError("Invalid job id")
+    return job_id
+
+
+def validate_language(language: str) -> str:
+    language = (language or "").strip().lower()
+    if language not in {"python", "java", "c"}:
+        raise ValueError("Unsupported language")
+    return language
+
+
+def validate_mode(mode: str) -> str:
+    mode = (mode or "").strip().lower()
+    if mode not in {"batch", "editor", "terminal"}:
+        raise ValueError("Unsupported mode")
+    return mode

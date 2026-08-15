@@ -8,6 +8,16 @@ from config import Config
 from models import User
 from database import SessionLocal, get_db
 
+def _escape_ldap_filter(value: str) -> str:
+    return (
+        value.replace("\\", "\\5c")
+        .replace("*", "\\2a")
+        .replace("(", "\\28")
+        .replace(")", "\\29")
+        .replace("\x00", "\\00")
+    )
+
+
 # ---------- LDAP Authentication ----------
 def authenticate_ldap(username: str, password: str) -> bool:
     """Bind to LDAP with given credentials."""
@@ -19,7 +29,8 @@ def authenticate_ldap(username: str, password: str) -> bool:
             password=Config.LDAP_BIND_PASSWORD,
             auto_bind=True,
         )
-        search_filter = Config.LDAP_USER_FILTER.format(username=username)
+        safe_username = _escape_ldap_filter(username)
+        search_filter = Config.LDAP_USER_FILTER.format(username=safe_username)
         search_base = Config.LDAP_BASE_DN
         search_result = bind_conn.search(
             search_base,
@@ -35,7 +46,7 @@ def authenticate_ldap(username: str, password: str) -> bool:
         elif hasattr(bind_conn.entries[0], "dn") and bind_conn.entries[0].dn:
             user_dn = bind_conn.entries[0].dn
         else:
-            user_dn = f"uid={username},{Config.LDAP_BASE_DN}"
+            user_dn = f"uid={safe_username},{Config.LDAP_BASE_DN}"
 
         user_conn = ldap3.Connection(server, user=user_dn, password=password, auto_bind=True)
         return bool(user_conn.bound)
@@ -74,7 +85,7 @@ def decode_jwt(token: str) -> dict | None:
 def get_current_user(request: Request, db: Session = Depends(get_db)):
     token = request.cookies.get("access_token")
     if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated please re login")
+        raise HTTPException(status_code=401, detail="Not authenticated")
 
     payload = decode_jwt(token)
     if not payload:
@@ -82,7 +93,7 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
 
     user_id = payload.get("user_id")
     if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid token payload")
+        raise HTTPException(status_code=401, detail="Invalid token")
 
     user = db.query(User).filter(User.id == user_id).first()
     if not user:

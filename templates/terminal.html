@@ -43,13 +43,16 @@
   </style>
 </head>
 <body>
-  <nav class="navbar navbar-expand-lg navbar-esprit">
+    <nav class="navbar navbar-expand-lg navbar-esprit">
     <div class="container">
       <a class="navbar-brand" href="/dashboard">HPC <span>ESPRIT</span></a>
       <div class="ms-auto text-white">
         {{ user.username }} ({{ user.role }})
         {% if active %}
-        <a href="/terminal/{{ reservation.id }}/stop" class="btn btn-sm btn-esprit-red ms-2">Exit Terminal</a>
+        <form method="post" action="/terminal/{{ reservation.id }}/stop" style="display:inline;" onsubmit="return confirm('Exit terminal session?');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+          <button type="submit" class="btn btn-sm btn-esprit-red ms-2">Exit Terminal</button>
+        </form>
         {% else %}
         <a href="/dashboard" class="btn btn-sm btn-esprit-red ms-2">Exit Terminal</a>
         {% endif %}
@@ -99,14 +102,108 @@
   <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js" integrity="sha384-xjfWUeCWdMtvpAb/SmM6lMzS6pQGcQa0loOl1d97j6Odw0vjK9nW3+dTb/bn/mwH" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js" integrity="sha384-dpjGwSSISUTz2taP54Bor7qkyMR20sSO9oe11UVYnGs2/YdUBf7HW30XKQx9PCzn" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-ka7Sk0Gln4gmtz2MlQnikT1wXgYsOg+OMhuP+IlRH9sENBO0LRn5q+8nbTov4+1p" crossorigin="anonymous"></script>
-  <script>
+  <script nonce="{{ csp_nonce(request) }}">
     const reservationId = "{{ reservation.id }}";
     const remainingSeconds = {{ remaining_seconds }};
     let term;
     let socket;
     let fitAddon;
     let active = {{ 'true' if active else 'false' }};
+    let receivedOutput = false;
+    let outputTimer = null;
     console.log('Terminal page loaded, active=', active, 'reservationId=', reservationId);
+
+    function resetTerminalState() {
+      if (socket) {
+        try { socket.close(); } catch (e) { /* ignore */ }
+      }
+      socket = null;
+      receivedOutput = false;
+      if (outputTimer) {
+        clearTimeout(outputTimer);
+        outputTimer = null;
+      }
+    }
+
+    function markInactive(reason) {
+      active = false;
+      const statusBadge = document.getElementById('statusBadge');
+      if (statusBadge) {
+        statusBadge.textContent = reason || 'Ended';
+        statusBadge.className = 'badge status-badge bg-secondary';
+      }
+      const timerEl = document.getElementById('timer');
+      if (timerEl) timerEl.textContent = '00:00:00';
+      if (term) {
+        term.write(`\r\n\x1b[33m${reason || 'Connection closed.'}\x1b[0m\r\n`);
+      }
+    }
+
+    function connectWebSocket() {
+      resetTerminalState();
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/terminal/${reservationId}/ws`;
+      socket = new WebSocket(wsUrl);
+
+      socket.onopen = () => {
+        console.log('WebSocket open');
+        receivedOutput = false;
+        outputTimer = setTimeout(() => {
+          if (!receivedOutput && socket && socket.readyState === WebSocket.OPEN) {
+            console.warn('Terminal WebSocket connected but no output received, retrying...');
+            socket.close();
+            setTimeout(connectWebSocket, 1000);
+          }
+        }, 4000);
+      };
+
+      socket.onmessage = (event) => {
+        console.log('WebSocket message:', event.data);
+        try {
+          const data = JSON.parse(event.data);
+          if (data.status === 'connected') {
+            console.log('Terminal session ready');
+            return;
+          }
+          if (data.output) {
+            receivedOutput = true;
+            if (outputTimer) {
+              clearTimeout(outputTimer);
+              outputTimer = null;
+            }
+            term.write(data.output);
+          } else if (data.status === 'closed') {
+            term.write(`\r\n\x1b[31mSession ended: ${data.reason}\x1b[0m\r\n`);
+            socket.close();
+          } else if (data.error) {
+            term.write(`\r\n\x1b[31mError: ${data.error}\x1b[0m\r\n`);
+            socket.close();
+          }
+        } catch (e) {
+          console.error('Failed to parse WebSocket message:', e);
+        }
+      };
+
+      socket.onclose = (event) => {
+        console.log('WebSocket closed:', event.code, event.reason);
+        if (outputTimer) {
+          clearTimeout(outputTimer);
+          outputTimer = null;
+        }
+        if (active) {
+          markInactive('Ended');
+        }
+      };
+
+      socket.onerror = (err) => {
+        console.error('WebSocket error event:', err);
+        if (outputTimer) {
+          clearTimeout(outputTimer);
+          outputTimer = null;
+        }
+        markInactive('Error');
+      };
+    }
 
     if (active) {
       term = new Terminal({
@@ -123,64 +220,6 @@
       term.loadAddon(fitAddon);
       term.open(document.getElementById('terminal-container'));
       fitAddon.fit();
-
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/terminal/${reservationId}/ws`;
-      let connectAttempts = 0;
-      const maxAttempts = 5;
-
-      function connectWebSocket() {
-        socket = new WebSocket(wsUrl);
-
-      socket.onopen = () => {
-        console.log('WebSocket open');
-      };
-
-      socket.onmessage = (event) => {
-        console.log('WebSocket message:', event.data);
-        try {
-          const data = JSON.parse(event.data);
-          if (data.status === 'connected') {
-            console.log('Terminal session ready');
-            return;
-          }
-          if (data.output) {
-            term.write(data.output);
-          } else if (data.status === 'closed') {
-            term.write(`\r\n\x1b[31mSession ended: ${data.reason}\x1b[0m\r\n`);
-            socket.close();
-          } else if (data.error) {
-            term.write(`\r\n\x1b[31mError: ${data.error}\x1b[0m\r\n`);
-            socket.close();
-          }
-        } catch (e) {
-          console.error('Failed to parse WebSocket message:', e);
-        }
-      };
-
-      socket.onclose = (event) => {
-        console.log('WebSocket closed:', event.code, event.reason);
-        active = false;
-        statusBadge.textContent = 'Ended';
-        statusBadge.className = 'badge status-badge bg-secondary';
-        clearInterval(interval);
-        timerEl.textContent = '00:00:00';
-        if (term) {
-          term.write('\r\n\x1b[33mConnection closed.\x1b[0m\r\n');
-        }
-      };
-
-      socket.onerror = (err) => {
-        console.error('WebSocket error event:', err);
-        active = false;
-        statusBadge.textContent = 'Error';
-        statusBadge.className = 'badge status-badge bg-danger';
-        clearInterval(interval);
-        if (term) {
-          term.write('\r\n\x1b[31mWebSocket error.\x1b[0m\r\n');
-        }
-      };
-      }
 
       setTimeout(connectWebSocket, 500);
 
@@ -204,7 +243,12 @@
 
       window.addEventListener('beforeunload', () => {
         if (active) {
-          navigator.sendBeacon(`/terminal/${reservationId}/stop`);
+          const csrfMatch = document.cookie.match(/(?:^|; )csrf_token=([^;]+)/);
+          if (csrfMatch) {
+            const formData = new FormData();
+            formData.append('csrf_token', decodeURIComponent(csrfMatch[1]));
+            navigator.sendBeacon(`/terminal/${reservationId}/stop`, formData);
+          }
         }
       });
     }

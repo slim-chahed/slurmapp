@@ -79,7 +79,7 @@
             </div>
 
             <div class="alert alert-info">
-              <strong>Cluster free resources:</strong> {{ resources.free_cpu }} CPUs / {{ resources.free_ram_gb }} GB RAM
+              <strong>Cluster free resources:</strong> {% if resources %}{{ resources.free_cpu }} CPUs / {{ resources.free_ram_gb }} GB RAM{% else %}N/A{% endif %}
             </div>
 
             <button type="submit" class="btn btn-esprit-red">Submit Request</button>
@@ -94,7 +94,7 @@
     &copy; HPC Esprit
   </footer>
 
-  <script>
+  <script nonce="{{ csp_nonce(request) }}">
     const modeSelect = document.getElementById('modeSelect');
     const codeBox = document.getElementById('codeBox');
     const languageBox = document.getElementById('languageBox');

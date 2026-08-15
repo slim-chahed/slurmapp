@@ -54,6 +54,11 @@ def _run_ssh(command: str) -> tuple[bool, str]:
 def read_slurm_output(job_id: str) -> str:
     if not job_id:
         return ""
+    from sanitize import validate_job_id
+    try:
+        job_id = validate_job_id(job_id)
+    except ValueError:
+        return ""
     ok, out = _run_ssh(f"cat /shared/output_{job_id}.log 2>/dev/null || echo 'NO_OUTPUT'")
     if ok and out != "NO_OUTPUT":
         return out

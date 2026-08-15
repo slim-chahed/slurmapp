@@ -26,6 +26,16 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
       <button type="submit" class="btn btn-warning mb-3">Reset Static Resources</button>
     </form>
+    <form method="post" action="/admin/cleanup-test-data" style="display:inline;" onsubmit="return confirm('Delete all ZAP/test reservations? This cannot be undone.');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <button type="submit" class="btn btn-danger mb-3">Cleanup ZAP/Test Data</button>
+    </form>
+
+    {% if request.query_params.get('cleaned') %}
+    <div class="alert alert-success">
+      Cleanup complete. Removed {{ request.query_params.get('cleaned') }} test reservation(s).
+    </div>
+    {% endif %}
 
     <div class="card-esprit p-3 mb-4">
       <h5 class="mb-0">System Status</h5>
@@ -173,7 +183,7 @@
     {% endif %}
   </div>
 
-  <script>
+  <script nonce="{{ csp_nonce(request) }}">
     async function refreshResources() {
       try {
         const res = await fetch('/debug/resources');

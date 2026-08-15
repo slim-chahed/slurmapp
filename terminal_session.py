@@ -96,9 +96,12 @@ exit 0
         ok2, out2 = _run_ssh(f"docker ps -a --filter id={container_id} --format '{{{{.ID}}}}' 2>/dev/null || true")
         return ok2 and short_id in out2
 
-    def _wait_for_container(self) -> None:
+    def _wait_for_container(self, timeout: int = 60) -> None:
         expected_id = self._get_expected_container_id()
+        deadline = time.time() + timeout
         while not expected_id or not self._is_container_present(expected_id):
+            if time.time() > deadline:
+                raise TimeoutError(f"Container {self.container_name} did not appear within {timeout}s")
             time.sleep(2)
             expected_id = self._get_expected_container_id()
 
@@ -119,14 +122,16 @@ exit 0
             return True
         return state in ("running", "completed")
 
-    def _wait_for_slurm_job(self) -> None:
-        while True:
+    def _wait_for_slurm_job(self, timeout: int = 120) -> None:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
             state = self._get_job_state_from_squeue()
             if state is None:
                 state = self._get_job_state_from_sacct()
             if state and self._is_terminal_job_state(state):
                 return
             time.sleep(2)
+        raise TimeoutError(f"Slurm job {self.job_id} did not reach terminal state within {timeout}s")
 
     def start_slurm_allocation(self) -> dict:
         try:
@@ -158,7 +163,9 @@ exit 0
     def connect_to_existing(self) -> dict:
         try:
             self._wait_for_container()
-            return self._connect_to_container()
+            result = self._connect_to_container()
+            logger.info(f"[TERMINAL] reservation_id={self.reservation_id} connect_to_existing success={result.get('success')} active={self.active}")
+            return result
         except Exception as e:
             logger.error(f"Failed to connect to existing container for terminal {self.reservation_id}: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
@@ -167,18 +174,25 @@ exit 0
         self.client = self._ssh_client()
         self.client.get_transport().set_keepalive(30)
         self.channel = self.client.invoke_shell(term="xterm-256color", width=120, height=40)
-        self.channel.send(f"docker exec -it {self.container_name} sh -c 'while true; do /bin/sh || /bin/bash || true; done'\n")
 
         self.active = True
         self.start_time = datetime.utcnow()
         self.expires_at = self.start_time + timedelta(hours=self.duration_hours)
 
-        time.sleep(2)
-        initial = self.read_output()
-        self.output_buffer.append(initial)
+        time.sleep(1)
+        self.channel.send(f"docker exec -it {self.container_name} sh -c 'while true; do /bin/sh || /bin/bash || true; done'\n")
+        time.sleep(3)
+        initial = self.read_output() or ""
+        logger.info(f"[TERMINAL] reservation_id={self.reservation_id} initial_output_len={len(initial)} initial_output_repr={initial[:120]!r}")
         if "error" in initial.lower() or "failed" in initial.lower():
             self.active = False
             return {"success": False, "error": initial or "DinD container failed to start"}
+
+        self.channel.send("clear\n")
+        time.sleep(0.3)
+        self.read_output()
+
+        self.output_buffer = []
 
         return {"success": True}
 

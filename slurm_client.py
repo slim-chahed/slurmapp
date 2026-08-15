@@ -24,7 +24,6 @@ def submit_slurm_job(script: str) -> dict:
     }
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=20)
-        print(f"[SUBMIT] status={response.status_code} body={response.text[:500]}")
         if response.status_code == 200:
             data = response.json()
             job_id = data.get("job_id")
@@ -33,9 +32,9 @@ def submit_slurm_job(script: str) -> dict:
             else:
                 return {"success": False, "error": data.get("errors") or "No job_id in response"}
         else:
-            return {"success": False, "error": f"HTTP {response.status_code}: {response.text}"}
+            return {"success": False, "error": f"HTTP {response.status_code}: {response.text[:200]}"}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": "Submission failed"}
 
 
 def cancel_slurm_job(job_id: str) -> dict:
@@ -46,9 +45,8 @@ def cancel_slurm_job(job_id: str) -> dict:
     }
     try:
         response = requests.delete(url, headers=headers, timeout=20)
-        print(f"[CANCEL] job_id={job_id} status={response.status_code}")
         if response.status_code in (200, 202, 204):
             return {"success": True}
-        return {"success": False, "error": f"HTTP {response.status_code}: {response.text}"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": f"HTTP {response.status_code}: {response.text[:200]}"}
+    except Exception:
+        return {"success": False, "error": "Cancellation failed"}

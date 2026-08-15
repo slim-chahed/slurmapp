@@ -35,7 +35,7 @@
 
     <form method="get" class="mb-3">
       <div class="input-group">
-        <input type="text" name="search" class="form-control" placeholder="Search by job name..." value="{{ search or '' }}">
+        <input type="text" name="search" class="form-control" placeholder="Search by job name..." value="{{ (search or '') | escape }}">
         <button class="btn btn-esprit-red" type="submit">Search</button>
       </div>
     </form>
@@ -93,7 +93,7 @@
     &copy; HPC Esprit
   </footer>
 
-    <script>
+    <script nonce="{{ csp_nonce(request) }}">
       async function pollStatus(id) {
         try {
           const mode = document.querySelector(`#status-${id}`)?.dataset.mode || '';

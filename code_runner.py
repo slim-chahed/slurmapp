@@ -46,20 +46,14 @@ def build_script(language: str, cpu: int, ram: int, duration_hours: int, job_id:
 
 {runner}
 """
-    print(f"[BUILD_SCRIPT] job_id={job_id} cpu={cpu} ram={ram} duration={duration_hours} language={language}")
-    print(f"[BUILD_SCRIPT] script=\n{script}")
     return script
 
 
 def run_code(language: str, code: str, cpu: int, ram: int, duration_hours: int) -> dict:
     job_id = uuid.uuid4().hex[:8]
-    print(f"[RUN_CODE] language={language} cpu={cpu} ram={ram} duration={duration_hours} job_id={job_id}")
     ok = _write_code_to_vm(language, code, job_id)
     if not ok:
-        print(f"[RUN_CODE] write_code FAILED for job_id={job_id}")
         return {"success": False, "error": "Failed to write code to VM /shared"}
     script = build_script(language, cpu, ram, duration_hours, job_id)
-    print(f"[RUN_CODE] submitting script for job_id={job_id}")
     result = submit_slurm_job(script)
-    print(f"[RUN_CODE] submit result={result} for job_id={job_id}")
     return result
